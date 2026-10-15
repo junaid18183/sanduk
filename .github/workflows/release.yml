@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
+    # macOS runner required: the darwin build uses cgo to include the Keychain
+    # backend, which cannot be cross-compiled from Linux.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
         with:

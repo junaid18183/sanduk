@@ -50,9 +50,16 @@ Before pushing, run `gofmt -l .` (must be empty), `go vet ./...`, `go test ./...
 and a cross-compile check:
 
 ```sh
-for t in linux/amd64 linux/arm64 windows/amd64 darwin/amd64 darwin/arm64; do
+for t in linux/amd64 linux/arm64 windows/amd64; do
   GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -o /dev/null .
 done
+```
+
+On macOS, also check the real darwin build (cgo **on**), which is what ships:
+
+```sh
+CGO_ENABLED=1 go build -o /dev/null .
+go test ./vault -run TestNativeBackendsIncludesKeychainOnMacOS
 ```
 
 ## Security rules — these are not optional
@@ -90,6 +97,16 @@ Break these and you break the tool's security model:
 6. **Every backend implements `keyring.Keyring`** (`Get`, `GetMetadata`, `Set`,
    `Remove`, `Keys`). New backends are selected in `vault/keyring.go` from
    `SANDUK_BACKEND` / `--backend`.
+7. **macOS binaries must be built with `CGO_ENABLED=1`.** Both the Keychain
+   backend (`99designs/keyring`, tag `darwin && cgo`) and the
+   `keychain-biometric` backend require cgo. A `CGO_ENABLED=0` macOS build has no
+   OS keystore at all. `.goreleaser.yml` keeps darwin (cgo) separate from
+   linux/windows and the release workflow runs on macOS for this reason.
+   `vault.TestNativeBackendsIncludesKeychainOnMacOS` guards it.
+8. **Never let the library's own file backend be selectable.** Its opener cannot
+   fail, so it shadows a missing native keystore and then errors on the first
+   read with "No directory provided for file keyring". `nativeBackends()`
+   filters it out and sanduk falls back to its own age backend instead.
 
 ## Coding conventions
 

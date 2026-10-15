@@ -15,8 +15,15 @@ const defaultService = "sanduk"
 // OpenKeyring opens the configured keyring backend.
 //
 // The backend is selected with --backend / SANDUK_BACKEND (mirroring aws-vault).
-// When unset, the platform default order from 99designs/keyring is used:
-// macOS Keychain, Windows Credential Manager, Secret Service / KWallet, pass.
+// When unset, only the platform's *native* keystores are considered. The
+// library's own file backend is deliberately excluded: its opener never fails,
+// so it would silently shadow a missing native keystore and then error on the
+// first read. If no native keystore is available we fall back to sanduk's own
+// age-encrypted file, which is explicit about what it is and where it lives.
+//
+// Note that 99designs/keyring's macOS Keychain backend is compiled only under
+// `darwin && cgo`, so macOS builds must be made with CGO_ENABLED=1 to have an
+// OS keystore at all.
 func OpenKeyring() (keyring.Keyring, error) {
 	service := os.Getenv("SANDUK_SERVICE")
 	if service == "" {
@@ -35,18 +42,11 @@ func OpenKeyring() (keyring.Keyring, error) {
 
 	backend := strings.TrimSpace(os.Getenv("SANDUK_BACKEND"))
 
-	// The age backend is sanduk's own encrypted-file implementation; it is not
-	// part of 99designs/keyring, so route it before delegating.
+	// The age and biometric backends are sanduk's own implementations; they are
+	// not part of 99designs/keyring, so route them before delegating.
 	switch backend {
 	case "file", "age":
-		dir := os.Getenv("SANDUK_FILE_DIR")
-		if dir == "" {
-			dir = defaultFileDir()
-		}
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, err
-		}
-		return newAgeKeyring(filepath.Join(dir, service+".age"), filePasswordFunc), nil
+		return newAgeKeyring(agePath(service), filePasswordFunc), nil
 
 	case "keychain-biometric", "biometric":
 		return newBiometricKeyring(service)
@@ -55,7 +55,7 @@ func OpenKeyring() (keyring.Keyring, error) {
 	var allowed []keyring.BackendType
 	switch backend {
 	case "":
-		// Use the platform default.
+		allowed = nativeBackends()
 	case "keychain":
 		allowed = []keyring.BackendType{keyring.KeychainBackend}
 	case "secret-service":
@@ -70,10 +70,44 @@ func OpenKeyring() (keyring.Keyring, error) {
 		return nil, fmt.Errorf("unknown backend %q (want keychain, keychain-biometric, secret-service, wincred, kwallet, pass, file or age)", backend)
 	}
 
-	if allowed != nil {
-		cfg.AllowedBackends = allowed
+	cfg.AllowedBackends = allowed
+	kr, err := keyring.Open(cfg)
+	if err == nil {
+		return kr, nil
 	}
-	return keyring.Open(cfg)
+	if backend != "" {
+		return nil, err
+	}
+
+	// No native keystore is available — for example a macOS build made with
+	// CGO_ENABLED=0, which cannot include the Keychain backend.
+	path := agePath(service)
+	fmt.Fprintf(os.Stderr,
+		"sanduk: no OS keystore available, using the encrypted file backend at %s\n", path)
+	return newAgeKeyring(path, filePasswordFunc), nil
+}
+
+// nativeBackends returns the compiled-in native keystores, excluding the
+// library's file backend. The result is never nil, so keyring.Open cannot fall
+// back to its own defaults.
+func nativeBackends() []keyring.BackendType {
+	out := []keyring.BackendType{}
+	for _, b := range keyring.AvailableBackends() {
+		if b == keyring.FileBackend {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+// agePath is the location of the age-encrypted vault file.
+func agePath(service string) string {
+	dir := os.Getenv("SANDUK_FILE_DIR")
+	if dir == "" {
+		dir = defaultFileDir()
+	}
+	return filepath.Join(dir, service+".age")
 }
 
 func defaultFileDir() string {

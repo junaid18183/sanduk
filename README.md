@@ -166,6 +166,36 @@ Two caveats:
   `keychain-biometric` backend so reading a secret requires Touch ID, which a
   headless agent cannot satisfy.
 
+## Troubleshooting
+
+### `sanduk: No directory provided for file keyring`
+
+You are running a macOS build that has **no Keychain backend**. Affected
+versions are **v0.1.0 and v0.1.1**, which were compiled with `CGO_ENABLED=0`;
+the Keychain backend in `99designs/keyring` is compiled only under
+`darwin && cgo`, so those binaries had no OS keystore and fell through to a
+misconfigured file backend.
+
+Fixed in **v0.1.2**. Either upgrade, or build from source (cgo is on by default
+on macOS):
+
+```sh
+go install github.com/junaid18183/sanduk@latest
+```
+
+sanduk now detects the situation and says so, falling back to the
+age-encrypted file rather than failing:
+
+```
+sanduk: no OS keystore available, using the encrypted file backend at ~/.local/share/sanduk/sanduk.age
+```
+
+### `sanduk list` shows no entries after changing backend
+
+Each backend is a separate namespace. Items stored with `keychain` are not
+visible under `keychain-biometric`, and vice versa. Use the same `--backend`
+you stored them with.
+
 ## Development
 
 ```sh
@@ -175,6 +205,12 @@ make vet
 
 CI runs `gofmt`, `go vet`, the test suite, and cross-compilation on Linux and
 macOS. Releases are cut by pushing a `v*` tag, which triggers GoReleaser.
+
+**macOS builds must use `CGO_ENABLED=1`** or the Keychain backend is omitted.
+`.goreleaser.yml` therefore splits darwin (cgo) from linux/windows (no cgo), and
+the release workflow runs on a macOS runner so darwin can be linked against the
+Security framework. `vault.TestNativeBackendsIncludesKeychainOnMacOS` fails the
+build if that regresses.
 
 ## License
 

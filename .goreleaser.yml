@@ -7,23 +7,41 @@ before:
     - go mod tidy
 
 builds:
-  - id: sanduk
+  # macOS needs cgo: 99designs/keyring's Keychain backend and sanduk's
+  # keychain-biometric backend are both compiled only under `darwin && cgo`.
+  # Building macOS with CGO_ENABLED=0 yields a binary with no OS keystore.
+  - id: sanduk-darwin
     main: .
     binary: sanduk
-    env:
-      - CGO_ENABLED=0
     goos:
       - darwin
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+    ldflags:
+      - -s -w -X github.com/junaid18183/sanduk/cli.version={{ .Version }}
+
+  - id: sanduk-others
+    main: .
+    binary: sanduk
+    goos:
       - linux
       - windows
     goarch:
       - amd64
       - arm64
+    env:
+      - CGO_ENABLED=0
     ldflags:
       - -s -w -X github.com/junaid18183/sanduk/cli.version={{ .Version }}
 
 archives:
   - id: sanduk
+    ids:
+      - sanduk-darwin
+      - sanduk-others
     formats:
       - tar.gz
     format_overrides:
