@@ -47,6 +47,9 @@ func OpenKeyring() (keyring.Keyring, error) {
 			return nil, err
 		}
 		return newAgeKeyring(filepath.Join(dir, service+".age"), filePasswordFunc), nil
+
+	case "keychain-biometric", "biometric":
+		return newBiometricKeyring(service)
 	}
 
 	var allowed []keyring.BackendType
@@ -64,7 +67,7 @@ func OpenKeyring() (keyring.Keyring, error) {
 	case "pass":
 		allowed = []keyring.BackendType{keyring.PassBackend}
 	default:
-		return nil, fmt.Errorf("unknown backend %q (want keychain, secret-service, wincred, kwallet, pass, file or age)", backend)
+		return nil, fmt.Errorf("unknown backend %q (want keychain, keychain-biometric, secret-service, wincred, kwallet, pass, file or age)", backend)
 	}
 
 	if allowed != nil {

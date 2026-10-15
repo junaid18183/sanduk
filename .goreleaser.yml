@@ -1,0 +1,73 @@
+version: 2
+
+project_name: sanduk
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: sanduk
+    main: .
+    binary: sanduk
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/junaid18183/sanduk/cli.version={{ .Version }}
+
+archives:
+  - id: sanduk
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+# Homebrew tap publishing is opt-in: it needs a token that can push to
+# github.com/junaid18183/homebrew-tap, which the default GITHUB_TOKEN cannot.
+# To enable it:
+#   1. create a `homebrew-tap` repository under junaid18183
+#   2. create a PAT with `repo` scope and add it as the repository secret
+#      HOMEBREW_TAP_GITHUB_TOKEN
+#   3. pass that secret to the GoReleaser step in
+#      .github/workflows/release.yml as HOMEBREW_TAP_GITHUB_TOKEN
+#   4. uncomment the block below
+#
+# brews:
+#   - name: sanduk
+#     repository:
+#       owner: junaid18183
+#       name: homebrew-tap
+#       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+#     directory: Formula
+#     homepage: https://github.com/junaid18183/sanduk
+#     description: Store API keys in your OS keychain and inject them on demand
+#     license: MIT
+#     install: |
+#       bin.install "sanduk"

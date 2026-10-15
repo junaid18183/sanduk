@@ -11,6 +11,9 @@ import (
 // cfgFile is bound to the persistent --config flag.
 var cfgFile string
 
+// backendFlag is bound to the persistent --backend flag.
+var backendFlag string
+
 // Execute builds and runs the root command.
 func Execute() error {
 	root := newRootCmd()
@@ -30,10 +33,20 @@ func newRootCmd() *cobra.Command {
 			"demand, without writing plaintext secrets to disk.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// The --backend flag is a convenience wrapper over SANDUK_BACKEND,
+			// which is what the vault package reads.
+			if backendFlag != "" {
+				return os.Setenv("SANDUK_BACKEND", backendFlag)
+			}
+			return nil
+		},
 	}
 
 	root.PersistentFlags().StringVar(&cfgFile, "config", "",
 		"config file (default $XDG_CONFIG_HOME/sanduk/config.toml)")
+	root.PersistentFlags().StringVar(&backendFlag, "backend", "",
+		"keyring backend: keychain, keychain-biometric, secret-service, wincred, kwallet, pass, file, age")
 
 	root.AddCommand(
 		newAddCmd(),

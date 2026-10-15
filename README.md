@@ -19,10 +19,18 @@ that actually needs them.
 ## Install
 
 ```sh
+# from source
 make build        # produces ./sanduk
-# or
+
+# or with Go
 go install github.com/junaid18183/sanduk@latest
+
+# or download a release binary
+# https://github.com/junaid18183/sanduk/releases/latest
 ```
+
+Prebuilt binaries for macOS, Linux, and Windows (amd64/arm64) are attached to
+each [release](https://github.com/junaid18183/sanduk/releases).
 
 ## Quick start
 
@@ -96,22 +104,51 @@ export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS_JSON" | jq -r .AWS_SECRET_ACCESS_KEY
 
 Selected with `--backend` / `SANDUK_BACKEND` (mirroring aws-vault):
 
-`keychain` (macOS), `secret-service` (GNOME Keyring), `kwallet` (KDE),
-`wincred` (Windows), `pass`, and `file` (encrypted file, for headless use).
+| Backend | Notes |
+| --- | --- |
+| `keychain` | macOS login Keychain |
+| `keychain-biometric` | macOS only, **experimental**: every read requires Touch ID / the login password |
+| `secret-service` | GNOME Keyring |
+| `kwallet` | KDE KWallet |
+| `wincred` | Windows Credential Manager |
+| `pass` | [password-store](https://www.passwordstore.org/) |
+| `file` / `age` | age-encrypted file, for headless or scripted use |
 
-When unset, the platform default is used. The `file` backend reads its
-passphrase from `SANDUK_FILE_PASSPHRASE` or prompts, and stores data under
-`$XDG_DATA_HOME/sanduk` (or `~/.local/share/sanduk`).
+When unset, the platform default is used. The `age` backend derives a key from
+a passphrase via age's scrypt, keeps every item in one encrypted document, and
+writes it atomically with mode `0600` under `$XDG_DATA_HOME/sanduk` (or
+`~/.local/share/sanduk`). It takes its passphrase from
+`SANDUK_FILE_PASSPHRASE` or prompts once per process.
+
+#### Requiring Touch ID (`keychain-biometric`)
+
+```sh
+sanduk --backend keychain-biometric add openai
+sanduk --backend keychain-biometric list
+```
+
+On macOS this stores each item with a **user-presence access control**, so
+reading it prompts for Touch ID or your login password. Because a headless
+process cannot satisfy that prompt, this is the strongest gate sanduk offers
+against an agent reading your secrets.
+
+Two caveats:
+
+- It is **experimental**. It compiles on macOS with cgo enabled (`CGO_ENABLED=1`),
+  but the biometric prompt has not been verified in CI. Off macOS, or with cgo
+  disabled, selecting this backend returns an error.
+- It uses a separate namespace (`sanduk-biometric`), so items you stored with
+  the standard `keychain` backend will not appear. Re-add them to use it.
 
 ### Configuration
 
 | Variable | Purpose |
 | --- | --- |
-| `SANDUK_BACKEND` | Select the keyring backend. |
+| `SANDUK_BACKEND` | Select the keyring backend (same as `--backend`). |
 | `SANDUK_SERVICE` | Override the keychain service name. |
 | `SANDUK_CONFIG` | Override the config file path. |
-| `SANDUK_FILE_DIR` | Data directory for the `file` backend. |
-| `SANDUK_FILE_PASSPHRASE` | Passphrase for the `file` backend (non-interactive). |
+| `SANDUK_FILE_DIR` | Data directory for the `file`/`age` backend. |
+| `SANDUK_FILE_PASSPHRASE` | Passphrase for the `file`/`age` backend (non-interactive). |
 
 ## Security notes
 
@@ -125,8 +162,9 @@ passphrase from `SANDUK_FILE_PASSPHRASE` or prompts, and stores data under
   protection is that the value lives in the keychain and is injected only where
   needed.
 - A process running as *you* with shell access can still run `sanduk`. Pair this
-  with your agent's own command-permission rules, and consider requiring
-  user-presence (Touch ID) on the keychain item for a stronger gate.
+  with your agent's own command-permission rules, and use the experimental
+  `keychain-biometric` backend so reading a secret requires Touch ID, which a
+  headless agent cannot satisfy.
 
 ## Development
 
@@ -134,6 +172,9 @@ passphrase from `SANDUK_FILE_PASSPHRASE` or prompts, and stores data under
 make test     # unit + integration tests (encrypted-file backend, no keychain prompts)
 make vet
 ```
+
+CI runs `gofmt`, `go vet`, the test suite, and cross-compilation on Linux and
+macOS. Releases are cut by pushing a `v*` tag, which triggers GoReleaser.
 
 ## License
 
