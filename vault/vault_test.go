@@ -89,11 +89,11 @@ func TestResolveEnvGroup(t *testing.T) {
 		"AWS_ACCESS_KEY_ID":     "AKIA-test",
 		"AWS_SECRET_ACCESS_KEY": "secret-test",
 	}
-	if err := v.AddGroup("saic-gov", fields); err != nil {
+	if err := v.AddGroup("aws-prod", fields); err != nil {
 		t.Fatal(err)
 	}
 
-	env, err := v.ResolveEnv("saic-gov", &Config{})
+	env, err := v.ResolveEnv("aws-prod", &Config{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

@@ -39,7 +39,7 @@ each [release](https://github.com/junaid18183/sanduk/releases).
 sanduk add openai --env OPENAI_API_KEY
 
 # a group of related fields (field names are the env var names)
-sanduk add-group saic-gov \
+sanduk add-group aws-prod \
   --field AWS_ACCESS_KEY_ID=AKIA... \
   --field AWS_SECRET_ACCESS_KEY=...
 
@@ -50,7 +50,7 @@ sanduk list
 
 ```sh
 sanduk exec openai -- aider
-sanduk exec saic-gov -- aws s3 ls
+sanduk exec aws-prod -- aws s3 ls
 
 # bind one secret to a specific variable
 sanduk exec OPENAI_API_KEY=openai -- python train.py
@@ -70,7 +70,7 @@ eval "$(sanduk export openai)"
 sanduk export openai --format dotenv >> .env
 
 # the aws-vault-style JSON flow
-CREDS_JSON=$(sanduk export saic-gov --format json)
+CREDS_JSON=$(sanduk export aws-prod --format json)
 export AWS_ACCESS_KEY_ID=$(echo "$CREDS_JSON" | jq -r .AWS_ACCESS_KEY_ID)
 export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS_JSON" | jq -r .AWS_SECRET_ACCESS_KEY)
 ```

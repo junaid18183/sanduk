@@ -16,7 +16,7 @@ func newExportCmd() *cobra.Command {
 		Long: "Print an entry's secrets in a machine-readable form. Unlike get, export\n" +
 			"is not gated on a terminal: it is the sanctioned interface for scripting\n" +
 			"and .env files.\n\n" +
-			"  CREDS_JSON=$(sanduk export saic-gov --format json)\n" +
+			"  CREDS_JSON=$(sanduk export aws-prod --format json)\n" +
 			"  export AWS_ACCESS_KEY_ID=$(echo \"$CREDS_JSON\" | jq -r .AWS_ACCESS_KEY_ID)",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

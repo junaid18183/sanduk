@@ -12,7 +12,7 @@ func TestDescribeUsesMetadataOnly(t *testing.T) {
 			"openai": {Env: "OPENAI_API_KEY", Description: "OpenAI key"},
 		},
 		Groups: map[string]vault.GroupMeta{
-			"saic-gov": {Description: "SAIC gov"},
+			"aws-prod": {Description: "AWS production"},
 			"untitled": {},
 		},
 	}
@@ -25,9 +25,9 @@ func TestDescribeUsesMetadataOnly(t *testing.T) {
 		t.Fatalf("openai info = %q", info)
 	}
 
-	typ, info = describe(cfg, "saic-gov")
-	if typ != "group" || info != "SAIC gov" {
-		t.Fatalf("saic-gov = (%q, %q)", typ, info)
+	typ, info = describe(cfg, "aws-prod")
+	if typ != "group" || info != "AWS production" {
+		t.Fatalf("aws-prod = (%q, %q)", typ, info)
 	}
 
 	// A group without a description must still be reported as a group.

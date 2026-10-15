@@ -23,7 +23,7 @@ func TestConfigRoundTrip(t *testing.T) {
 
 	c := &Config{
 		Secrets: map[string]SecretMeta{"openai": {Env: "OPENAI_API_KEY", Description: "key"}},
-		Groups:  map[string]GroupMeta{"saic": {Description: "gov"}},
+		Groups:  map[string]GroupMeta{"aws-prod": {Description: "production"}},
 	}
 	if err := SaveConfig(path, c); err != nil {
 		t.Fatalf("save: %v", err)
@@ -36,7 +36,7 @@ func TestConfigRoundTrip(t *testing.T) {
 	if got.Secrets["openai"].Env != "OPENAI_API_KEY" {
 		t.Fatalf("secret meta lost: %+v", got.Secrets)
 	}
-	if got.Groups["saic"].Description != "gov" {
+	if got.Groups["aws-prod"].Description != "production" {
 		t.Fatalf("group meta lost: %+v", got.Groups)
 	}
 }
