@@ -5,10 +5,6 @@ other development secrets. It stores secrets in your operating system's secure
 keystore and exposes them to the processes that need them — on demand, without
 writing plaintext secrets to disk.
 
-It is modelled on [aws-vault](https://github.com/99designs/aws-vault), but for
-static API keys (OpenAI, DeepSeek, Stripe, …) rather than temporary AWS
-credentials.
-
 ## Why
 
 Secrets in a plaintext `.env` are readable by everything that can read files,

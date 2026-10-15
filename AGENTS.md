@@ -196,5 +196,11 @@ Break these and you break the tool's security model:
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs
 GoReleaser and publishes darwin/linux/windows (amd64/arm64) archives plus
 `checksums.txt`. The version is stamped with `-X .../cli.version` from the tag.
+
+**Versioning: stay on `0.0.x`.** The next release is always the next
+`0.0.X` increment (`v0.0.1` → `v0.0.2` → …) unless the user asks for a specific
+version. Do not promote to `0.1.0`, `1.0.0`, or any other number on your own,
+even for a feature release that would conventionally warrant a minor bump.
+
 Homebrew publishing is intentionally disabled until a tap token exists — see the
 commented block in `.goreleaser.yml`. `dist/` is gitignored; never commit it.
