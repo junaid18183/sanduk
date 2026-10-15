@@ -1,0 +1,13 @@
+# Committed, and not secret: it names the vault entry this project uses, so
+# `sanduk exec -- <command>` works from any subdirectory without repeating it.
+#
+# Secret *values* never live here. They are in your OS keystore; this file and
+# ~/.config/sanduk/config.toml only hold names and mappings.
+
+entry = "demo"
+
+# Optionally narrow the default entry to just the keys this project needs, so
+# `sanduk exec -- cmd` injects a least-privilege subset. The demo leaves it
+# commented out so every field shows up in `make dev`:
+#
+#   only = ["DB_URL", "API_KEY"]

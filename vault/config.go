@@ -12,6 +12,13 @@ import (
 // commit, and version: it never contains secret values, only the mapping from
 // vault entries to environment variable names plus human descriptions.
 type Config struct {
+	// Backend settings. These are defaults only: a --flag or an environment
+	// variable always wins, so one config file can serve several machines with
+	// different keystores. All three are optional.
+	Backend  string `toml:"backend,omitempty"`
+	Keychain string `toml:"keychain,omitempty"`
+	Service  string `toml:"service,omitempty"`
+
 	Secrets map[string]SecretMeta `toml:"secrets,omitempty"`
 	Groups  map[string]GroupMeta  `toml:"groups,omitempty"`
 }

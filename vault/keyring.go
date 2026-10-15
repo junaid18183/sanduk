@@ -18,6 +18,12 @@ const (
 	defaultKeychainName = "login"
 )
 
+// DefaultService returns the keychain service name used when none is set.
+func DefaultService() string { return defaultService }
+
+// DefaultKeychainName returns the macOS keychain used when none is set.
+func DefaultKeychainName() string { return defaultKeychainName }
+
 // keychainTarget resolves the keychain to use from SANDUK_KEYCHAIN.
 //
 // Anything other than the default "login" makes keyring create and use a

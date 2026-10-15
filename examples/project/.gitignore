@@ -1,0 +1,5 @@
+# Never commit a real environment file. This is the only reason it exists: the
+# demo writes no .env, and neither should you.
+.env
+.env.local
+.env.*.local

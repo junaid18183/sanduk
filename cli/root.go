@@ -37,19 +37,21 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// The flags are convenience wrappers over SANDUK_BACKEND and
-			// SANDUK_KEYCHAIN, which is what the vault package reads.
-			if backendFlag != "" {
-				if err := os.Setenv("SANDUK_BACKEND", backendFlag); err != nil {
-					return err
-				}
+			// Resolve the backend settings from flag > env > config > default and
+			// hand them to the vault package, which reads them from the
+			// environment (see SANDUK_BACKEND / SANDUK_KEYCHAIN / SANDUK_SERVICE).
+			s, err := resolveSettings()
+			if err != nil {
+				// A broken config must not brick every command, including
+				// `sanduk config`, which is how you would inspect it. Remember
+				// the failure and let each command report it.
+				settingsErr = err
+				resolved = nil
+				return nil
 			}
-			if keychainFlag != "" {
-				if err := os.Setenv("SANDUK_KEYCHAIN", keychainFlag); err != nil {
-					return err
-				}
-			}
-			return nil
+			resolved = s
+			settingsErr = nil
+			return exportSettings(s)
 		},
 	}
 

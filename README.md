@@ -47,6 +47,10 @@ sanduk list
 > `add-group --field KEY=VALUE` also exists, but a value passed as an argument
 > is visible in `ps`. Prefer `--from-file`, or `sanduk group set`, which prompts.
 
+> A runnable version of everything below lives in
+> [`examples/project`](examples/project):
+> `cd examples/project && make setup && make dev`.
+
 ### Run a command with secrets injected
 
 ```sh
@@ -108,6 +112,10 @@ child process of that shell (including an agent) inherits the secrets:
 eval "$(sanduk export --format shell)"
 ```
 
+[`examples/project/.envrc`](examples/project/.envrc) takes the opposite approach:
+it exports nothing and explains why, so the secrets still exist only in the
+`sanduk exec` child.
+
 ### Use from a `.env` / script
 
 `export` is the sanctioned scripting interface (it is deliberately *not* gated on
@@ -144,7 +152,7 @@ export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS_JSON" | jq -r .AWS_SECRET_ACCESS_KEY
 | `sanduk remove <name>` | Delete an entry. |
 | `sanduk rotate <name>` | Replace a flat secret's value. |
 | `sanduk import <file.env>` | Bulk-import a `.env` (`--group`, `--shred`). |
-| `sanduk config` | Show/open the metadata config. |
+| `sanduk config` | Show the config file and the settings sanduk resolved (`--path`, `--edit`). |
 
 Both `exec` and `export` take the same *selectors*: a bare entry name (a group
 contributes one variable per field), or `ENVVAR=entry` to bind a single flat
@@ -163,7 +171,9 @@ the entry when none is given.
 
 ### Backends
 
-Selected with `--backend` / `SANDUK_BACKEND` (mirroring aws-vault):
+Selected with `--backend`, `SANDUK_BACKEND`, or `backend` in the config file. A
+flag beats the environment variable, which beats the config file, which beats the
+platform default — so one config file can serve several machines:
 
 | Backend | Notes |
 | --- | --- |
@@ -235,6 +245,33 @@ password the system prompts for. Things worth knowing before you reach for it:
 | `SANDUK_FILE_DIR` | Data directory for the `file`/`age` backend. |
 | `SANDUK_FILE_PASSPHRASE` | Passphrase for the `file`/`age` backend (non-interactive). |
 | `.sanduk.toml` (file) | Repository's default entry and optional key subset. |
+
+The metadata config can also carry standing backend settings. They are defaults
+only, and are resolved last:
+
+```toml
+# ~/.config/sanduk/config.toml — non-secret, safe to version
+backend  = "keychain"   # or secret-service, wincred, pass, file/age, ...
+keychain = "sanduk"     # macOS: a dedicated keychain (opt in deliberately)
+service  = "sanduk"     # namespace; also names the age vault file
+```
+
+`backend` is machine-specific — a config that says `"keychain"` fails on Linux —
+so set it on the machine that needs it, or leave it out and let the platform
+decide. Ask sanduk what it actually resolved, and where each value came from:
+
+```sh
+$ sanduk config
+# path:     /Users/you/.config/sanduk/config.toml
+# backend:  keychain (from default)
+# keychain: login (from default)
+# service:  sanduk (from default)
+# flags beat environment variables, which beat this file
+```
+
+A value that loses to a flag or an environment variable says so (`from flag`,
+`from env`), so there is no guessing about which of the three is in play. The
+annotated file is [`examples/config.toml.example`](examples/config.toml.example).
 
 ## Security notes
 

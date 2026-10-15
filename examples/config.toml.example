@@ -1,0 +1,71 @@
+# sanduk metadata config — a starting point.
+#
+# Copy it to:
+#
+#   $XDG_CONFIG_HOME/sanduk/config.toml     # usually ~/.config/sanduk/config.toml
+#
+# or point SANDUK_CONFIG / --config at it. Run `sanduk config` at any time to
+# see the file, plus the settings sanduk actually resolved and where each came
+# from.
+#
+# Nothing in this file is secret. sanduk never writes a secret value here —
+# values live in your OS keystore — so it is safe to read, commit and version.
+
+# ---------------------------------------------------------------------------
+# Backend settings
+#
+# Every setting below is a *default*. A flag always beats an environment
+# variable, which always beats this file:
+#
+#   --backend age   >   SANDUK_BACKEND=age   >   backend = "age"   >   platform default
+#
+# That is deliberate: it lets one config file serve several machines that have
+# different keystores.
+# ---------------------------------------------------------------------------
+
+# Which keystore to use:
+#
+#   keychain            macOS login Keychain (the default on macOS)
+#   keychain-biometric  macOS, experimental: every read needs Touch ID
+#   secret-service      GNOME Keyring (default on Linux)
+#   kwallet             KDE KWallet
+#   wincred             Windows Credential Manager (default on Windows)
+#   pass                password-store
+#   file / age          age-encrypted file, for headless or scripted use
+#
+# Leave it commented out to let the platform choose. Setting it explicitly is
+# only portable to the machine that has that keystore — a config that says
+# "keychain" fails on Linux.
+#
+# backend = "keychain"
+
+# macOS only: which keychain to store entries in. "login" is the default, and
+# it is already unlocked when you log in. Any other name makes sanduk create a
+# dedicated keychain on first write; read "Using a dedicated keychain" in the
+# README before choosing one, because it adds an unlock boundary.
+#
+# keychain = "sanduk"
+
+# Namespace for entries. The default is "sanduk". Change it to get a completely
+# separate vault (work vs personal, or one per client) without touching the
+# entries you already have. For the file/age backend it also names the vault
+# file: <SANDUK_FILE_DIR>/<service>.age
+#
+# service = "sanduk"
+
+# ---------------------------------------------------------------------------
+# Entry metadata
+#
+# Written for you by `sanduk add` and `sanduk add-group`, and safe to edit by
+# hand. It exists so `sanduk list` can show types, environment variable mappings
+# and descriptions without ever reading a secret value.
+# ---------------------------------------------------------------------------
+
+[secrets]
+  [secrets.openai]
+    env = "OPENAI_API_KEY"
+    description = "OpenAI API key"
+
+[groups]
+  [groups.warden]
+    description = "warden API + DB stack"

@@ -23,6 +23,7 @@ cli/                    one file per cobra command, registered in cli/root.go
   project.go            resolves .sanduk.toml into a default entry
   group.go              group set/unset/show, the field-level edit path
   doctor.go             compares a group against .env.example
+  settings.go           resolves backend settings (flag > env > config) for every command
   *_test.go             command-level tests
 vault/                  all domain logic; no cobra imports here
   entry.go              Secret/Group entry types and validation
@@ -40,6 +41,7 @@ vault/                  all domain logic; no cobra imports here
   redact.go, tty.go     display helpers
 .github/workflows/      ci.yml (checks) and release.yml (GoReleaser on v* tags)
 .goreleaser.yml         release configuration
+examples/               config.toml.example, plus project/ — a runnable starter project
 ```
 
 ## Common tasks
@@ -79,6 +81,29 @@ go test ./vault -run TestNativeBackendsIncludesKeychainOnMacOS
 | `SANDUK_FILE_DIR` | Directory of the age vault; default `~/.local/share/sanduk`. |
 | `SANDUK_FILE_PASSPHRASE` | Passphrase for the age backend (non-interactive). |
 | `./.sanduk.toml` | Committed project file: `entry` and optional `only`. Non-secret. |
+
+`backend`, `keychain` and `service` may also be set in the metadata config. They
+are defaults only: the precedence is always **flag > env > config > platform
+default**, and `sanduk config` prints the effective value with its source.
+
+## Smoke test
+
+`examples/project` is a runnable end-to-end check of the CLI. Drive it against
+the age backend so it never touches a real keychain:
+
+```sh
+make build                       # ./sanduk at the repo root
+cd examples/project
+export SANDUK=$PWD/../../sanduk
+export SANDUK_BACKEND=file SANDUK_FILE_PASSPHRASE=fake \
+       SANDUK_FILE_DIR="$(mktemp -d)" SANDUK_CONFIG="$(mktemp -d)/config.toml"
+make setup dev                   # doctor fails here by design: demo.env omits LEGACY_TOKEN
+make add-legacy
+make doctor                      # now clean
+make clean
+```
+
+It stores a group literally named `demo`, so `make clean` removes it again.
 
 ## Security rules — these are not optional
 
@@ -138,6 +163,14 @@ Break these and you break the tool's security model:
 11. **A dedicated keychain is opt-in.** `--keychain` / `SANDUK_KEYCHAIN` accepts a
     name, never a path (`keychainTarget()` rejects separators). The default stays
     `login`; see the README for why a second keychain is not automatically safer.
+12. **Config-file backend settings are defaults, never overrides.** Precedence is
+    flag > env > config > platform default, resolved once in `PersistentPreRunE`
+    (`cli/settings.go`) and exported as the `SANDUK_*` variables the vault
+    package reads. Commands must report the resolved copy (`resolved`, set by
+    that hook), not re-resolve: after the export, every value would look like it
+    came `from env`. A broken config must not brick `sanduk config` — it is how
+    you inspect the config — so the failure lands in `settingsErr` and the
+    commands that need the config report it themselves.
 
 ## Coding conventions
 
