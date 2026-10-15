@@ -35,29 +35,78 @@ each [release](https://github.com/junaid18183/sanduk/releases).
 ## Quick start
 
 ```sh
-# a flat secret
+# a flat secret (value is read from an echo-off prompt, never from argv)
 sanduk add openai --env OPENAI_API_KEY
 
 # a group of related fields (field names are the env var names)
-sanduk add-group aws-prod \
-  --field AWS_ACCESS_KEY_ID=AKIA... \
-  --field AWS_SECRET_ACCESS_KEY=...
+sanduk add-group warden --from-file .env.warden
 
 sanduk list
 ```
+
+> `add-group --field KEY=VALUE` also exists, but a value passed as an argument
+> is visible in `ps`. Prefer `--from-file`, or `sanduk group set`, which prompts.
 
 ### Run a command with secrets injected
 
 ```sh
 sanduk exec openai -- aider
-sanduk exec aws-prod -- aws s3 ls
+sanduk exec warden -- pnpm dev
 
 # bind one secret to a specific variable
 sanduk exec OPENAI_API_KEY=openai -- python train.py
+
+# merge several selections; a later one wins
+sanduk exec BASE=base warden -- pnpm dev
+
+# narrow what the child receives (unknown keys are an error, not a silence)
+sanduk exec warden --only DB_URL,API_KEY -- psql "$DB_URL"
 ```
 
 The secrets exist only inside the child process — they are never exported into
 your shell, so they are not inherited by anything else you launch from it.
+
+### Project workflow
+
+Commit a `.sanduk.toml` in the repository root to name the entry the project uses
+(and optionally the keys you normally need), so nobody has to retype it:
+
+```toml
+# .sanduk.toml — non-secret, safe to commit
+entry = "warden"
+only  = ["DB_URL", "API_KEY"]
+```
+
+Now the entry can be omitted, from any subdirectory:
+
+```sh
+sanduk exec -- pnpm dev
+sanduk export --format dotenv
+```
+
+Pair that with a committed `.env.example` (the keys, with dummy values) and
+`sanduk doctor` reports drift between what the app expects and what is stored:
+
+```sh
+$ sanduk doctor
+KEY          STATUS
+DB_URL       ok
+STRIPE_KEY   missing
+LEGACY_TOKEN extra
+warden: 1/2 template key(s) present; 1 not in the template: LEGACY_TOKEN
+sanduk: 1 key(s) missing from group "warden": STRIPE_KEY
+```
+
+Missing keys exit non-zero; extra keys are a warning. Compare against another
+file with `--template`.
+
+Use `.envrc` only for interactive work — direnv exports into the shell, so every
+child process of that shell (including an agent) inherits the secrets:
+
+```sh
+# .envrc — committed; names only, never values
+eval "$(sanduk export --format shell)"
+```
 
 ### Use from a `.env` / script
 
@@ -68,6 +117,9 @@ a terminal):
 # shell / dotenv
 eval "$(sanduk export openai)"
 sanduk export openai --format dotenv >> .env
+
+# feed a tool that insists on a file, without writing plaintext to disk
+docker compose --env-file <(sanduk export warden --format dotenv) up
 
 # the aws-vault-style JSON flow
 CREDS_JSON=$(sanduk export aws-prod --format json)
@@ -81,14 +133,23 @@ export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS_JSON" | jq -r .AWS_SECRET_ACCESS_KEY
 | --- | --- |
 | `sanduk add <name>` | Add/update a flat secret. |
 | `sanduk add-group <name>` | Add/update a group (`--field K=V`, `--from-json`, `--from-file`). |
+| `sanduk group set <name> [KEY…]` | Merge fields into a group (prompt, `--from-env`, `--from-file`). |
+| `sanduk group unset <name> KEY…` | Remove fields from a group. |
+| `sanduk group show <name>` | List a group's field names (never values). |
 | `sanduk get <name>` | Print a raw value (terminal-gated; `--force` to override). |
-| `sanduk exec <name> -- <cmd>` | Run a command with secrets injected. |
-| `sanduk export <name> -f shell\|dotenv\|json` | Emit secrets for scripts. |
+| `sanduk exec [selector…] -- <cmd>` | Run a command with secrets injected (`--only`). |
+| `sanduk export [selector…] -f shell\|dotenv\|json` | Emit secrets for scripts (`--only`). |
 | `sanduk list` | List names and metadata (never values). |
+| `sanduk doctor [entry]` | Check a group against `.env.example` (`--template`). |
 | `sanduk remove <name>` | Delete an entry. |
 | `sanduk rotate <name>` | Replace a flat secret's value. |
 | `sanduk import <file.env>` | Bulk-import a `.env` (`--group`, `--shred`). |
 | `sanduk config` | Show/open the metadata config. |
+
+Both `exec` and `export` take the same *selectors*: a bare entry name (a group
+contributes one variable per field), or `ENVVAR=entry` to bind a single flat
+secret to a variable. They are merged left to right, and `.sanduk.toml` supplies
+the entry when none is given.
 
 ## How it works
 
@@ -140,21 +201,49 @@ Two caveats:
 - It uses a separate namespace (`sanduk-biometric`), so items you stored with
   the standard `keychain` backend will not appear. Re-add them to use it.
 
+#### Using a dedicated keychain
+
+By default sanduk uses the macOS **login keychain**, the one that is already
+unlocked for a logged-in user. You can point it at its own keychain instead:
+
+```sh
+sanduk --keychain sanduk list        # or SANDUK_KEYCHAIN=sanduk
+```
+
+This creates `~/Library/Keychains/sanduk.keychain` on the first write, with a
+password the system prompts for. Things worth knowing before you reach for it:
+
+- It is a **second unlock boundary**, not a strictly stronger one. A dedicated
+  keychain's password normally has to live in the login keychain, which collapses
+  per-item access control into one grant.
+- After a reboot the dedicated keychain is locked, so reads will prompt.
+- Prompt fatigue is mostly a **code-signing** problem: macOS ties keychain access
+  to a signed identity, so an unsigned or rebuilt binary looks like a new app and
+  re-prompts. `aws-vault` signs its macOS releases for exactly this reason.
+- `SANDUK_KEYCHAIN_PASSPHRASE` sets the password non-interactively when the
+  keychain is first created (for scripting; it is a secret, so prefer the prompt).
+
 ### Configuration
 
 | Variable | Purpose |
 | --- | --- |
 | `SANDUK_BACKEND` | Select the keyring backend (same as `--backend`). |
+| `SANDUK_KEYCHAIN` | macOS keychain name (same as `--keychain`; default `login`). |
+| `SANDUK_KEYCHAIN_PASSPHRASE` | Password used when creating a dedicated keychain. |
 | `SANDUK_SERVICE` | Override the keychain service name. |
 | `SANDUK_CONFIG` | Override the config file path. |
 | `SANDUK_FILE_DIR` | Data directory for the `file`/`age` backend. |
 | `SANDUK_FILE_PASSPHRASE` | Passphrase for the `file`/`age` backend (non-interactive). |
+| `.sanduk.toml` (file) | Repository's default entry and optional key subset. |
 
 ## Security notes
 
 - Values are never accepted as command-line arguments, so they cannot leak via
   process listings (`ps`). Input comes from an echo-disabled prompt, an env var,
-  a file, or stdin.
+  a file, or stdin. The one exception is `add-group --field K=V` /
+  `--from-json`, kept for convenience; `--from-file` and `group set` avoid it.
+- `--only` injects a least-privilege subset of a group, and an unknown key is an
+  error rather than a silent omission.
 - `sanduk get` refuses to print a secret to a non-terminal unless `--force` is
   given.
 - Unlike aws-vault, sanduk cannot issue short-lived credentials — there is no

@@ -61,6 +61,84 @@ func (v *Vault) AddGroup(name string, fields map[string]string) error {
 	return v.put(name, &Entry{Version: entryVersion, Type: TypeGroup, Fields: fields})
 }
 
+// MergeGroup updates individual fields of a group, leaving the fields not named
+// in fields untouched. It is the "edit one field" path: the caller never has to
+// re-supply values it does not want to change. A group that does not exist yet
+// is created with exactly these fields, matching the upsert behaviour of add
+// and add-group.
+func (v *Vault) MergeGroup(name string, fields map[string]string) error {
+	if len(fields) == 0 {
+		return fmt.Errorf("no fields provided")
+	}
+	for k := range fields {
+		if k == "" {
+			return fmt.Errorf("empty field name")
+		}
+	}
+
+	e, err := v.Get(name)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return v.AddGroup(name, fields)
+		}
+		return err
+	}
+	if e.Type != TypeGroup {
+		return fmt.Errorf("%q is a %s, not a group", name, e.Type)
+	}
+	if e.Fields == nil {
+		e.Fields = make(map[string]string, len(fields))
+	}
+	for k, val := range fields {
+		e.Fields[k] = val
+	}
+	return v.put(name, e)
+}
+
+// UnsetGroupFields removes fields from an existing group. It refuses to leave
+// the group empty, because an empty group is not a valid entry.
+func (v *Vault) UnsetGroupFields(name string, keys []string) error {
+	if len(keys) == 0 {
+		return fmt.Errorf("no fields provided")
+	}
+	e, err := v.Get(name)
+	if err != nil {
+		return err
+	}
+	if e.Type != TypeGroup {
+		return fmt.Errorf("%q is a %s, not a group", name, e.Type)
+	}
+	for _, k := range keys {
+		if _, ok := e.Fields[k]; !ok {
+			return fmt.Errorf("group %q has no field %q", name, k)
+		}
+		delete(e.Fields, k)
+	}
+	if len(e.Fields) == 0 {
+		return fmt.Errorf("refusing to remove the last field of %q; use \"sanduk remove %s\" to delete the entry",
+			name, name)
+	}
+	return v.put(name, e)
+}
+
+// GroupFieldNames returns a group's field names, sorted. The values are read as
+// part of loading the entry but are never returned or displayed.
+func (v *Vault) GroupFieldNames(name string) ([]string, error) {
+	e, err := v.Get(name)
+	if err != nil {
+		return nil, err
+	}
+	if e.Type != TypeGroup {
+		return nil, fmt.Errorf("%q is a %s, not a group", name, e.Type)
+	}
+	names := make([]string, 0, len(e.Fields))
+	for k := range e.Fields {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 // Remove deletes an entry.
 func (v *Vault) Remove(name string) error {
 	if err := v.kr.Remove(name); err != nil {

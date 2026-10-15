@@ -14,6 +14,9 @@ var cfgFile string
 // backendFlag is bound to the persistent --backend flag.
 var backendFlag string
 
+// keychainFlag is bound to the persistent --keychain flag.
+var keychainFlag string
+
 // Execute builds and runs the root command.
 func Execute() error {
 	root := newRootCmd()
@@ -34,10 +37,17 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// The --backend flag is a convenience wrapper over SANDUK_BACKEND,
-			// which is what the vault package reads.
+			// The flags are convenience wrappers over SANDUK_BACKEND and
+			// SANDUK_KEYCHAIN, which is what the vault package reads.
 			if backendFlag != "" {
-				return os.Setenv("SANDUK_BACKEND", backendFlag)
+				if err := os.Setenv("SANDUK_BACKEND", backendFlag); err != nil {
+					return err
+				}
+			}
+			if keychainFlag != "" {
+				if err := os.Setenv("SANDUK_KEYCHAIN", keychainFlag); err != nil {
+					return err
+				}
 			}
 			return nil
 		},
@@ -47,10 +57,13 @@ func newRootCmd() *cobra.Command {
 		"config file (default $XDG_CONFIG_HOME/sanduk/config.toml)")
 	root.PersistentFlags().StringVar(&backendFlag, "backend", "",
 		"keyring backend: keychain, keychain-biometric, secret-service, wincred, kwallet, pass, file, age")
+	root.PersistentFlags().StringVar(&keychainFlag, "keychain", "",
+		"macOS keychain to use (default \"login\"; a dedicated keychain is created on first write)")
 
 	root.AddCommand(
 		newAddCmd(),
 		newAddGroupCmd(),
+		newGroupCmd(),
 		newGetCmd(),
 		newRemoveCmd(),
 		newRotateCmd(),
@@ -58,6 +71,7 @@ func newRootCmd() *cobra.Command {
 		newExecCmd(),
 		newExportCmd(),
 		newImportCmd(),
+		newDoctorCmd(),
 		newConfigCmd(),
 		newVersionCmd(),
 	)

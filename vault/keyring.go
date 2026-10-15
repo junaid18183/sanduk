@@ -10,7 +10,32 @@ import (
 	"golang.org/x/term"
 )
 
-const defaultService = "sanduk"
+const (
+	defaultService = "sanduk"
+
+	// defaultKeychainName is macOS's login keychain. 99designs/keyring turns it
+	// into "login.keychain", which resolves through the keychain search list.
+	defaultKeychainName = "login"
+)
+
+// keychainTarget resolves the keychain to use from SANDUK_KEYCHAIN.
+//
+// Anything other than the default "login" makes keyring create and use a
+// dedicated keychain (macOS only), which is unlocked as its own boundary. It is
+// opt-in: the login keychain is already unlocked for a logged-in user, so it
+// usually prompts less than a second keychain would.
+func keychainTarget() (string, error) {
+	name := strings.TrimSpace(os.Getenv("SANDUK_KEYCHAIN"))
+	if name == "" {
+		return defaultKeychainName, nil
+	}
+	// keyring appends ".keychain" to this and hands it to the Security
+	// framework, so accept a name and reject anything path-shaped.
+	if strings.ContainsAny(name, `/\`) || name == "." || name == ".." {
+		return "", fmt.Errorf("invalid keychain name %q: pass a name, not a path", name)
+	}
+	return name, nil
+}
 
 // OpenKeyring opens the configured keyring backend.
 //
@@ -30,14 +55,25 @@ func OpenKeyring() (keyring.Keyring, error) {
 		service = defaultService
 	}
 
+	keychain, err := keychainTarget()
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := keyring.Config{
 		ServiceName:             service,
-		KeychainName:            "login",
+		KeychainName:            keychain,
 		LibSecretCollectionName: "login",
 		KWalletAppID:            service,
 		KWalletFolder:           service,
 		WinCredPrefix:           service,
 		PassPrefix:              service,
+	}
+
+	// Only consulted when keyring has to create a dedicated keychain; when it
+	// is unset the user is prompted for a new keychain password.
+	if pw := os.Getenv("SANDUK_KEYCHAIN_PASSPHRASE"); pw != "" {
+		cfg.KeychainPasswordFunc = func(string) (string, error) { return pw, nil }
 	}
 
 	backend := strings.TrimSpace(os.Getenv("SANDUK_BACKEND"))

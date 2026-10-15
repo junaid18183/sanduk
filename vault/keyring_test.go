@@ -48,3 +48,41 @@ func TestUnknownBackendIsRejected(t *testing.T) {
 		t.Fatal("expected an error for an unknown backend")
 	}
 }
+
+func TestKeychainTarget(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"", defaultKeychainName, false},
+		{"  ", defaultKeychainName, false},
+		{"sanduk", "sanduk", false},
+		{"work-sanduk", "work-sanduk", false},
+		// keyring appends ".keychain" and hands the result to the Security
+		// framework, so a path-shaped value must never be accepted.
+		{"../evil", "", true},
+		{"a/b", "", true},
+		{`a\b`, "", true},
+		{".", "", true},
+		{"..", "", true},
+	}
+
+	for _, c := range cases {
+		t.Setenv("SANDUK_KEYCHAIN", c.in)
+		got, err := keychainTarget()
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("keychainTarget(%q) = %q, want an error", c.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("keychainTarget(%q): %v", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("keychainTarget(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

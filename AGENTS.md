@@ -16,15 +16,20 @@ for the native backends, and `filippo.io/age` for the encrypted-file backend.
 ```
 main.go                 entry point; calls cli.Execute()
 cli/                    one file per cobra command, registered in cli/root.go
-  root.go               root command, --config and --backend flags, config helpers
+  root.go               root command, --config/--backend/--keychain flags, config helpers
   input.go              terminal input helpers (echo-off prompt, stdin, confirm)
   util.go               shared helpers (field parsing, metadata recording)
+  selector.go           exec/export selectors (entry or ENVVAR=entry) + --only filter
+  project.go            resolves .sanduk.toml into a default entry
+  group.go              group set/unset/show, the field-level edit path
+  doctor.go             compares a group against .env.example
   *_test.go             command-level tests
 vault/                  all domain logic; no cobra imports here
   entry.go              Secret/Group entry types and validation
-  vault.go              Vault: Get/Add/List/Remove/ResolveEnv
+  vault.go              Vault: Get/Add/List/Remove/ResolveEnv, group field edits
   config.go             non-secret metadata config (~/.config/sanduk/config.toml)
-  keyring.go            backend selection
+  project.go            .sanduk.toml: the repo's default entry (non-secret)
+  keyring.go            backend selection, keychain target
   backend_age.go        age-encrypted file backend
   backend_biometric_*   macOS Touch ID backend (darwin+cgo) and its stub
   exec_unix.go          execve-based secret injection
@@ -62,6 +67,19 @@ CGO_ENABLED=1 go build -o /dev/null .
 go test ./vault -run TestNativeBackendsIncludesKeychainOnMacOS
 ```
 
+## Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `SANDUK_BACKEND` / `--backend` | Backend: `keychain`, `keychain-biometric`, `secret-service`, `wincred`, `kwallet`, `pass`, `file`/`age`. |
+| `SANDUK_KEYCHAIN` / `--keychain` | macOS keychain name; default `login`. A name, never a path. |
+| `SANDUK_KEYCHAIN_PASSPHRASE` | Password used only when creating a dedicated keychain. |
+| `SANDUK_SERVICE` | Keychain service name; default `sanduk`. Also names the age file. |
+| `SANDUK_CONFIG` | Metadata config path; default `~/.config/sanduk/config.toml`. |
+| `SANDUK_FILE_DIR` | Directory of the age vault; default `~/.local/share/sanduk`. |
+| `SANDUK_FILE_PASSPHRASE` | Passphrase for the age backend (non-interactive). |
+| `./.sanduk.toml` | Committed project file: `entry` and optional `only`. Non-secret. |
+
 ## Security rules — these are not optional
 
 - **Never print, paste, log, echo, or commit a secret value.** Use `[REDACTED]`
@@ -69,7 +87,8 @@ go test ./vault -run TestNativeBackendsIncludesKeychainOnMacOS
   tool output summaries, commit messages, and examples.
 - **Never touch a developer's real keychain while developing or testing.** Tests
   must run against the age/file backend via `SANDUK_BACKEND=file`,
-  `SANDUK_FILE_DIR=<temp>`, and `SANDUK_FILE_PASSPHRASE=<fake>`.
+  `SANDUK_FILE_DIR=<temp>`, and `SANDUK_FILE_PASSPHRASE=<fake>`. Set
+  `SANDUK_CONFIG=<temp>` too, so tests never write the real metadata config.
 - **Never run the `keychain-biometric` backend automatically.** It stores items
   with a user-presence ACL, so any read triggers a Touch ID / login prompt on the
   machine and can block the agent. It is opt-in and manually verified only.
@@ -88,7 +107,9 @@ Break these and you break the tool's security model:
    the list path is a regression.
 3. **Secret values are never accepted as command-line arguments** (argv is
    visible in process listings). Input comes from an echo-off prompt, `--from-env`,
-   `--from-file`, or stdin.
+   `--from-file`, or stdin. `group set` deliberately has no VALUE position for
+   this reason. `add-group --field K=V` and `--from-json` are the known
+   exceptions, kept for convenience — don't copy that shape into new commands.
 4. **`get` is terminal-gated; `export` is not.** `get` refuses to write to a
    non-terminal unless `--force` is given. `export` is the sanctioned scripting
    interface and must keep working in pipes.
@@ -107,6 +128,16 @@ Break these and you break the tool's security model:
    fail, so it shadows a missing native keystore and then errors on the first
    read with "No directory provided for file keyring". `nativeBackends()`
    filters it out and sanduk falls back to its own age backend instead.
+9. **`.sanduk.toml` is non-secret, and only ever names an entry.** It is
+   committed to repositories, so it must never grow a value field. It supplies
+   the default entry plus an optional key subset (`only`), nothing more.
+10. **Selectors resolve left to right and the last one wins**, in both `exec` and
+    `export`; an entry name resolves through its own mapping, and `ENVVAR=entry`
+    binds one flat secret. `--only` filters the merged result and errors on an
+    unknown key rather than silently injecting nothing.
+11. **A dedicated keychain is opt-in.** `--keychain` / `SANDUK_KEYCHAIN` accepts a
+    name, never a path (`keychainTarget()` rejects separators). The default stays
+    `login`; see the README for why a second keychain is not automatically safer.
 
 ## Coding conventions
 

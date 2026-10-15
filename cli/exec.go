@@ -9,18 +9,27 @@ import (
 )
 
 func newExecCmd() *cobra.Command {
+	var only []string
+
 	cmd := &cobra.Command{
-		Use:   "exec <name> [--] <command> [args...]",
+		Use:   "exec [selector...] [--] <command> [args...]",
 		Short: "Run a command with an entry's secrets injected as environment variables",
-		Long: "Run a command with secrets from a vault entry injected into its\n" +
-			"environment. The secrets exist only inside the child process, never in\n" +
-			"the calling shell.\n\n" +
-			"Bind a single secret to a specific variable with an ad-hoc mapping:\n\n" +
-			"  sanduk exec OPENAI_API_KEY=openai -- aider",
-		Args:               cobra.MinimumNArgs(2),
-		DisableFlagParsing: false,
+		Long: "Run a command with secrets injected into its environment. The secrets exist\n" +
+			"only inside the child process, never in the calling shell.\n\n" +
+			"Selectors say what to inject, and are merged left to right:\n\n" +
+			"  warden                  every field of the group (or a flat secret's variable)\n" +
+			"  OPENAI_API_KEY=openai   one flat secret, under the given variable name\n\n" +
+			"Use `--` to separate selectors from the command; that is what makes several\n" +
+			"selectors unambiguous. With a " + vault.ProjectFileName + " in the repository the\n" +
+			"entry can be omitted altogether.\n\n" +
+			"  sanduk exec warden -- pnpm dev\n" +
+			"  sanduk exec BASE=base warden -- pnpm dev    # later selector wins\n" +
+			"  sanduk exec warden --only DB_URL -- psql\n" +
+			"  sanduk exec -- pnpm dev                     # entry from " + vault.ProjectFileName + "\n\n" +
+			"Without `--`, a single selector is accepted, then the command.",
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			selector, command, err := splitExecArgs(args, cmd.ArgsLenAtDash())
+			sels, command, err := splitExecArgs(args, cmd.ArgsLenAtDash())
 			if err != nil {
 				return err
 			}
@@ -34,41 +43,62 @@ func newExecCmd() *cobra.Command {
 				return err
 			}
 
-			env, err := resolveSelector(v, cfg, selector)
+			// No selector means "the repository's default entry".
+			if len(sels) == 0 {
+				entry, projOnly, err := defaultEntry()
+				if err != nil {
+					return err
+				}
+				sels = []string{entry}
+				if len(only) == 0 {
+					only = projOnly
+				}
+			}
+
+			env, err := resolveSelectors(v, cfg, parseSelectors(sels))
+			if err != nil {
+				return err
+			}
+			env, err = filterOnly(env, only)
 			if err != nil {
 				return err
 			}
 
-			return vault.Exec(command[0], command[1:], env)
+			if err := vault.Exec(command[0], command[1:], env); err != nil {
+				if strings.Contains(command[0], "=") {
+					return fmt.Errorf("%w (hint: selectors go before `--`; %q looks like an ENVVAR=entry binding)",
+						err, command[0])
+				}
+				return err
+			}
+			return nil
 		},
 	}
+
+	cmd.Flags().StringArrayVar(&only, "only", nil,
+		"inject only these keys (comma-separated, repeatable)")
 	return cmd
 }
 
-// splitExecArgs separates the selector from the command, tolerating an optional
-// `--` separator.
-func splitExecArgs(args []string, dash int) (selector string, command []string, err error) {
-	if dash >= 0 {
-		if dash != 1 {
-			return "", nil, fmt.Errorf("usage: sanduk exec <name> -- <command> [args...]")
-		}
-		return args[0], args[dash:], nil
-	}
-	return args[0], args[1:], nil
-}
+// splitExecArgs separates the selectors from the command.
+//
+// With `--`, everything before it is a selector and everything after it is the
+// command — that is what makes multiple selectors unambiguous. Without `--`,
+// only the first argument is a selector, preserving the original form:
+//
+//	sanduk exec warden -- pnpm dev
+//	sanduk exec warden pnpm dev
+func splitExecArgs(args []string, dash int) (sels []string, command []string, err error) {
+	const usage = "usage: sanduk exec [selector...] -- <command> [args...]"
 
-// resolveSelector resolves either a vault entry name or an ad-hoc
-// ENVVAR=entryname mapping into environment variables.
-func resolveSelector(v *vault.Vault, cfg *vault.Config, selector string) (map[string]string, error) {
-	if envName, name, ok := strings.Cut(selector, "="); ok && envName != "" {
-		e, err := v.Get(name)
-		if err != nil {
-			return nil, err
+	if dash >= 0 {
+		if dash == len(args) {
+			return nil, nil, fmt.Errorf("%s", usage)
 		}
-		if e.Type != vault.TypeSecret {
-			return nil, fmt.Errorf("%q is a group; ad-hoc binding requires a flat secret", name)
-		}
-		return map[string]string{envName: e.Value}, nil
+		return args[:dash], args[dash:], nil
 	}
-	return v.ResolveEnv(selector, cfg)
+	if len(args) < 2 {
+		return nil, nil, fmt.Errorf("%s", usage)
+	}
+	return args[:1], args[1:], nil
 }
