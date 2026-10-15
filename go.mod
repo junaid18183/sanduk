@@ -3,6 +3,7 @@ module github.com/junaid18183/sanduk
 go 1.26.4
 
 require (
+	filippo.io/age v1.3.2
 	github.com/99designs/keyring v1.2.2
 	github.com/BurntSushi/toml v1.6.0
 	github.com/spf13/cobra v1.10.2
@@ -10,6 +11,7 @@ require (
 )
 
 require (
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 // indirect
 	github.com/danieljoos/wincred v1.1.2 // indirect
 	github.com/dvsekhvalnov/jose2go v1.5.0 // indirect
@@ -18,5 +20,6 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mtibben/percent v0.2.1 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
+	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 )

@@ -35,6 +35,20 @@ func OpenKeyring() (keyring.Keyring, error) {
 
 	backend := strings.TrimSpace(os.Getenv("SANDUK_BACKEND"))
 
+	// The age backend is sanduk's own encrypted-file implementation; it is not
+	// part of 99designs/keyring, so route it before delegating.
+	switch backend {
+	case "file", "age":
+		dir := os.Getenv("SANDUK_FILE_DIR")
+		if dir == "" {
+			dir = defaultFileDir()
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+		return newAgeKeyring(filepath.Join(dir, service+".age"), filePasswordFunc), nil
+	}
+
 	var allowed []keyring.BackendType
 	switch backend {
 	case "":
@@ -49,22 +63,8 @@ func OpenKeyring() (keyring.Keyring, error) {
 		allowed = []keyring.BackendType{keyring.KWalletBackend}
 	case "pass":
 		allowed = []keyring.BackendType{keyring.PassBackend}
-	case "file":
-		allowed = []keyring.BackendType{keyring.FileBackend}
 	default:
-		return nil, fmt.Errorf("unknown backend %q (want keychain, secret-service, wincred, kwallet, pass or file)", backend)
-	}
-
-	if backend == "file" {
-		dir := os.Getenv("SANDUK_FILE_DIR")
-		if dir == "" {
-			dir = defaultFileDir()
-		}
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, err
-		}
-		cfg.FileDir = dir
-		cfg.FilePasswordFunc = filePasswordFunc
+		return nil, fmt.Errorf("unknown backend %q (want keychain, secret-service, wincred, kwallet, pass, file or age)", backend)
 	}
 
 	if allowed != nil {
