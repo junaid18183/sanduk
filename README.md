@@ -170,21 +170,20 @@ Two caveats:
 
 ### `sanduk: No directory provided for file keyring`
 
-You are running a macOS build that has **no Keychain backend**. Affected
-versions are **v0.1.0 and v0.1.1**, which were compiled with `CGO_ENABLED=0`;
-the Keychain backend in `99designs/keyring` is compiled only under
-`darwin && cgo`, so those binaries had no OS keystore and fell through to a
+This means the binary has **no macOS Keychain backend**. That backend is
+compiled only under `darwin && cgo` in `99designs/keyring`, so a macOS build
+made with `CGO_ENABLED=0` has no OS keystore at all and falls through to a
 misconfigured file backend.
 
-Fixed in **v0.1.2**. Either upgrade, or build from source (cgo is on by default
-on macOS):
+Official release binaries are built with cgo. If you built sanduk yourself,
+build with cgo enabled (the default on macOS):
 
 ```sh
 go install github.com/junaid18183/sanduk@latest
 ```
 
-sanduk now detects the situation and says so, falling back to the
-age-encrypted file rather than failing:
+When no OS keystore is available, sanduk says so and falls back to the
+age-encrypted file instead of failing:
 
 ```
 sanduk: no OS keystore available, using the encrypted file backend at ~/.local/share/sanduk/sanduk.age
