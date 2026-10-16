@@ -16,9 +16,8 @@ const sandukEnvPrefix = "SANDUK_"
 //
 // sanduk's own SANDUK_* variables are dropped from the inherited environment so
 // a child process cannot read the vault passphrase (or any other sanduk setting)
-// out of its own environment. Overrides may still set any name, including a
-// SANDUK_* one, since an override is an explicit injection. Keys are
-// de-duplicated, and the output order is stable across runs.
+// out of its own environment. Keys are de-duplicated, and the output order is stable across runs. Exec validates the
+// override names (ValidateEnvName refuses SANDUK_*) before calling this.
 func buildEnv(overrides map[string]string) []string {
 	seen := make(map[string]int)
 	var keys []string
@@ -34,7 +33,10 @@ func buildEnv(overrides map[string]string) []string {
 
 	for _, kv := range os.Environ() {
 		k, v, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, sandukEnvPrefix) {
+		// Case-insensitive: Windows environment names are, so a variable set
+		// as sanduk_file_passphrase still configures sanduk there and must not
+		// reach the child either.
+		if strings.HasPrefix(strings.ToUpper(k), sandukEnvPrefix) {
 			continue
 		}
 		add(k, v)

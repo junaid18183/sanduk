@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -31,6 +33,22 @@ type TrustStore struct {
 	Files map[string]string `toml:"files,omitempty"`
 }
 
+// checkTrustLocation refuses a trust store inside the project being judged. The
+// store's location can be moved with SANDUK_TRUST or SANDUK_CONFIG, so a cloned
+// repository's .envrc could otherwise point sanduk at a trusted.toml it ships
+// and approve its own .sanduk.toml.
+func checkTrustLocation(trustPath string, p *Project) error {
+	abs, err := filepath.Abs(trustPath)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(filepath.Dir(p.path), abs)
+	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("refusing trust store %s: it is inside the project it would approve (check SANDUK_TRUST / SANDUK_CONFIG)", trustPath)
+	}
+	return nil
+}
+
 func loadTrust(path string) (*TrustStore, error) {
 	t := &TrustStore{}
 	b, err := os.ReadFile(path)
@@ -39,6 +57,9 @@ func loadTrust(path string) (*TrustStore, error) {
 			return t, nil
 		}
 		return nil, err
+	}
+	if err := checkPrivateFile(path); err != nil {
+		return nil, fmt.Errorf("trust store: %w", err)
 	}
 	if err := toml.Unmarshal(b, t); err != nil {
 		return nil, err
@@ -62,32 +83,39 @@ func HashFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return hashBytes(b), nil
+}
+
+func hashBytes(b []byte) string {
 	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(sum[:])
 }
 
-// IsProjectTrusted reports whether path has been approved with its current
-// contents.
-func IsProjectTrusted(path string) (bool, error) {
-	hash, err := HashFile(path)
+// IsProjectTrusted reports whether p, as loaded, has been approved. It compares
+// the hash of the bytes p was parsed from, never a fresh read of the file.
+func IsProjectTrusted(p *Project) (bool, error) {
+	tp := TrustPath()
+	if err := checkTrustLocation(tp, p); err != nil {
+		return false, err
+	}
+	t, err := loadTrust(tp)
 	if err != nil {
 		return false, err
 	}
-	t, err := loadTrust(TrustPath())
-	if err != nil {
-		return false, err
-	}
-	return t.Files[path] == hash, nil
+	return p.hash != "" && t.Files[p.path] == p.hash, nil
 }
 
-// ApproveProject records the current contents of path as approved and returns
-// the hash that was stored.
-func ApproveProject(path string) (string, error) {
-	hash, err := HashFile(path)
-	if err != nil {
-		return "", err
+// ApproveProject records p, as loaded, as approved and returns the hash that
+// was stored — the hash of the bytes that were shown to the user, not of
+// whatever the file holds by the time the store is written.
+func ApproveProject(p *Project) (string, error) {
+	if p.hash == "" || p.path == "" {
+		return "", fmt.Errorf("project was not loaded from a file")
 	}
 	tp := TrustPath()
+	if err := checkTrustLocation(tp, p); err != nil {
+		return "", err
+	}
 	t, err := loadTrust(tp)
 	if err != nil {
 		return "", err
@@ -95,11 +123,11 @@ func ApproveProject(path string) (string, error) {
 	if t.Files == nil {
 		t.Files = map[string]string{}
 	}
-	t.Files[path] = hash
+	t.Files[p.path] = p.hash
 	if err := saveTrust(tp, t); err != nil {
 		return "", err
 	}
-	return hash, nil
+	return p.hash, nil
 }
 
 // TrustedPaths returns the approved project-file paths, sorted.

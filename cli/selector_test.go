@@ -163,7 +163,11 @@ func TestDefaultEntryFromProjectFile(t *testing.T) {
 	// A project file must be approved before it is used; approve it as
 	// `sanduk allow` would, writing the trust store to a temporary config dir.
 	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
-	if _, err := vault.ApproveProject(path); err != nil {
+	_, proj, err := vault.LoadProject(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, err := vault.ApproveProject(proj); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 
@@ -200,7 +204,11 @@ func TestDefaultEntryApprovalRevokedByEdit(t *testing.T) {
 	}
 	t.Chdir(dir)
 	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
-	if _, err := vault.ApproveProject(path); err != nil {
+	_, proj, err := vault.LoadProject(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, err := vault.ApproveProject(proj); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 

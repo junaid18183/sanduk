@@ -59,8 +59,10 @@ func (k *ageKeyring) passphrase() (string, error) {
 	if k.pass != "" {
 		return k.pass, nil
 	}
+	// A missing or empty file is a new vault; confirm the passphrase for
+	// both, or a typo locks the vault under a passphrase nobody knows.
 	creating := false
-	if _, err := os.Stat(k.path); errors.Is(err, os.ErrNotExist) {
+	if fi, err := os.Stat(k.path); errors.Is(err, os.ErrNotExist) || (err == nil && fi.Size() == 0) {
 		creating = true
 	}
 
@@ -113,6 +115,11 @@ func (k *ageKeyring) load() error {
 	if len(ciphertext) == 0 {
 		k.loaded = true
 		return nil
+	}
+	if err := checkPrivateFile(k.path); err != nil {
+		// The file is encrypted, so this is a warning rather than a refusal:
+		// a readable copy is still exposed to offline passphrase guessing.
+		fmt.Fprintf(os.Stderr, "sanduk: warning: %v\n", err)
 	}
 
 	pass, err := k.passphrase()

@@ -43,6 +43,11 @@ func newDoctorCmd() *cobra.Command {
 					return fmt.Errorf("no entry given and no %s found; use \"sanduk doctor <entry>\"",
 						vault.ProjectFileName)
 				}
+				// The same approval exec and export require: an unapproved
+				// repository must not choose which entry sanduk reads.
+				if err := requireTrustedProject(projPath, proj); err != nil {
+					return err
+				}
 				entry = proj.Entry
 			}
 

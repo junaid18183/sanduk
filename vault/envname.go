@@ -2,6 +2,7 @@ package vault
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -25,32 +26,84 @@ func ValidEnvName(name string) bool {
 	return true
 }
 
-// sensitiveEnvNames change how the dynamic loader or an interpreter behaves when
-// present in a child environment. Injecting one from a vault is almost never
-// intended, so a write that would use one is refused rather than silently
-// allowed. PATH is deliberately not listed: groups legitimately extend it.
+// sensitiveEnvNames change how the dynamic loader, a shell, an interpreter or
+// git behaves when present in a child environment. Injecting one from a vault is
+// almost never intended and is a classic way to run code inside the child, so
+// any use is refused rather than silently allowed. PATH is deliberately not
+// listed: groups legitimately extend it.
 var sensitiveEnvNames = map[string]bool{
-	"LD_PRELOAD":            true,
-	"LD_LIBRARY_PATH":       true,
-	"DYLD_INSERT_LIBRARIES": true,
-	"DYLD_LIBRARY_PATH":     true,
-	"BASH_ENV":              true,
-	"ENV":                   true,
-	"NODE_OPTIONS":          true,
-	"PYTHONSTARTUP":         true,
-	"PERL5OPT":              true,
-	"RUBYOPT":               true,
+	// shells
+	"BASH_ENV":       true,
+	"ENV":            true,
+	"PROMPT_COMMAND": true,
+	"PS4":            true,
+	"SHELLOPTS":      true,
+	"BASHOPTS":       true,
+	"IFS":            true,
+	"ZDOTDIR":        true,
+	// glibc
+	"GCONV_PATH": true,
+	// interpreters and runtimes
+	"NODE_OPTIONS":      true,
+	"NODE_PATH":         true,
+	"PYTHONSTARTUP":     true,
+	"PYTHONPATH":        true,
+	"PYTHONHOME":        true,
+	"PERL5OPT":          true,
+	"PERL5LIB":          true,
+	"PERLLIB":           true,
+	"RUBYOPT":           true,
+	"RUBYLIB":           true,
+	"JAVA_TOOL_OPTIONS": true,
+	"_JAVA_OPTIONS":     true,
+	"JDK_JAVA_OPTIONS":  true,
+	// git
+	"GIT_SSH_COMMAND": true,
+	"GIT_SSH":         true,
+	"GIT_EXEC_PATH":   true,
+	"GIT_ASKPASS":     true,
 }
 
-// ValidateEnvName checks that a group field name is safe to inject as an
-// environment variable. It is enforced on write, so a hand-typed or imported
-// field cannot become a loader-affecting variable in a child process.
+// sensitiveEnvPrefixes cover whole families of variables. LD_ and DYLD_ are the
+// dynamic loaders on Linux and macOS. GIT_CONFIG_ (GIT_CONFIG_COUNT,
+// GIT_CONFIG_KEY_n, ...) injects arbitrary git configuration, including
+// core.sshCommand. SANDUK_ is sanduk's own configuration: a stored SANDUK_TRUST
+// or SANDUK_BACKEND would reconfigure a child that is itself sanduk.
+var sensitiveEnvPrefixes = []string{"LD_", "DYLD_", "GIT_CONFIG_", sandukEnvPrefix}
+
+// ValidateEnvName checks that a name is safe to inject as an environment
+// variable. It is enforced when a name is stored and again whenever one is about
+// to reach a child process or be printed by export, so neither a hand-edited
+// config nor an entry written by an older sanduk can smuggle a loader-affecting
+// or shell-breaking name through.
 func ValidateEnvName(name string) error {
 	if !ValidEnvName(name) {
 		return fmt.Errorf("invalid environment variable name %q (want [A-Za-z_][A-Za-z0-9_]*)", name)
 	}
-	if sensitiveEnvNames[strings.ToUpper(name)] {
-		return fmt.Errorf("refusing %q as an environment variable name: it changes loader behaviour", name)
+	u := strings.ToUpper(name)
+	if sensitiveEnvNames[u] {
+		return fmt.Errorf("refusing %q as an environment variable name: it changes how a child process runs", name)
+	}
+	for _, p := range sensitiveEnvPrefixes {
+		if strings.HasPrefix(u, p) {
+			return fmt.Errorf("refusing %q as an environment variable name: %s* variables change how a child process runs", name, p)
+		}
+	}
+	return nil
+}
+
+// validateEnvNames applies ValidateEnvName to every key of env, in sorted order
+// so the error is deterministic.
+func validateEnvNames(env map[string]string) error {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if err := ValidateEnvName(k); err != nil {
+			return err
+		}
 	}
 	return nil
 }

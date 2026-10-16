@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/99designs/keyring"
@@ -43,22 +44,37 @@ func keychainTarget() (string, error) {
 	return name, nil
 }
 
+// serviceName resolves the keystore service name from SANDUK_SERVICE. It also
+// names the age file (<dir>/<service>.age), so like the keychain name it must be
+// a plain name: a value such as "../../x" would put the vault anywhere.
+func serviceName() (string, error) {
+	name := strings.TrimSpace(os.Getenv("SANDUK_SERVICE"))
+	if name == "" {
+		return defaultService, nil
+	}
+	if strings.ContainsAny(name, `/\`) || name == "." || name == ".." || strings.ContainsRune(name, 0) {
+		return "", fmt.Errorf("invalid service name %q: pass a name, not a path", name)
+	}
+	return name, nil
+}
+
 // OpenKeyring opens the configured keyring backend.
 //
-// The backend is selected with --backend / SANDUK_BACKEND (mirroring aws-vault).
-// When unset, only the platform's *native* keystores are considered. The
-// library's own file backend is deliberately excluded: its opener never fails,
-// so it would silently shadow a missing native keystore and then error on the
-// first read. If no native keystore is available we fall back to sanduk's own
-// age-encrypted file, which is explicit about what it is and where it lives.
+// The backend is selected with --backend / SANDUK_BACKEND (or the config file).
+// When unset, exactly one native keystore is used — see defaultNativeBackend —
+// and failing to open it is an error, never a fallback to another store. The
+// library's own file backend is never selectable: its opener cannot fail, so it
+// would shadow a missing keystore and then error on the first read. Only when
+// the platform keystore is not compiled in at all does sanduk fall back to its
+// own age-encrypted file, which is explicit about what it is and where it lives.
 //
 // Note that 99designs/keyring's macOS Keychain backend is compiled only under
 // `darwin && cgo`, so macOS builds must be made with CGO_ENABLED=1 to have an
 // OS keystore at all.
 func OpenKeyring() (keyring.Keyring, error) {
-	service := os.Getenv("SANDUK_SERVICE")
-	if service == "" {
-		service = defaultService
+	service, err := serviceName()
+	if err != nil {
+		return nil, err
 	}
 
 	keychain, err := keychainTarget()
@@ -97,19 +113,21 @@ func OpenKeyring() (keyring.Keyring, error) {
 	var allowed []keyring.BackendType
 	switch backend {
 	case "":
-		allowed = nativeBackends()
-		if len(allowed) == 0 {
-			// No native keystore is compiled in — for example a macOS build made
-			// with CGO_ENABLED=0, which cannot include the Keychain backend. Only
-			// this case falls back to the encrypted file. A native backend that
-			// merely fails to open (a locked keyring, a transient D-Bus error)
-			// returns an error instead, so secrets are never silently split
-			// across two stores.
+		native, ok := defaultNativeBackend(runtime.GOOS, nativeBackends())
+		if !ok {
+			// The platform's keystore is not compiled in — for example a macOS
+			// build made with CGO_ENABLED=0, which cannot include the Keychain
+			// backend. Only this case falls back to the encrypted file.
 			path := agePath(service)
 			fmt.Fprintf(os.Stderr,
 				"sanduk: no OS keystore compiled in, using the encrypted file backend at %s\n", path)
 			return newAgeKeyring(path, filePasswordFunc), nil
 		}
+		// Exactly one backend: keyring.Open silently moves on to the next
+		// allowed backend when one fails to open, so offering several would let
+		// a transient D-Bus error put new secrets in kwallet or pass instead,
+		// splitting the vault across two stores. A failure is an error.
+		allowed = []keyring.BackendType{native}
 	case "keychain":
 		allowed = []keyring.BackendType{keyring.KeychainBackend}
 	case "secret-service":
@@ -130,6 +148,26 @@ func OpenKeyring() (keyring.Keyring, error) {
 		return nil, err
 	}
 	return kr, nil
+}
+
+// defaultNativeBackend picks the one keystore used when no backend is set: the
+// Keychain on macOS, the Credential Manager on Windows and the Secret Service
+// elsewhere. kwallet and pass are never chosen implicitly; select them with
+// --backend. It reports false when that keystore is not compiled in.
+func defaultNativeBackend(goos string, available []keyring.BackendType) (keyring.BackendType, bool) {
+	want := keyring.SecretServiceBackend
+	switch goos {
+	case "darwin":
+		want = keyring.KeychainBackend
+	case "windows":
+		want = keyring.WinCredBackend
+	}
+	for _, b := range available {
+		if b == want {
+			return want, true
+		}
+	}
+	return "", false
 }
 
 // nativeBackends returns the compiled-in native keystores, excluding the

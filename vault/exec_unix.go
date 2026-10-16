@@ -12,6 +12,9 @@ import (
 // environment variables. This means secrets are visible only to the child
 // process, never to the caller's shell.
 func Exec(name string, args []string, env map[string]string) error {
+	if err := validateEnvNames(env); err != nil {
+		return err
+	}
 	path, err := exec.LookPath(name)
 	if err != nil {
 		return fmt.Errorf("could not find %q in PATH", name)

@@ -24,11 +24,11 @@ func cut(s string, sep byte) (before, after string, found bool) {
 }
 
 func errInvalidField(f string) error {
-	return fmt.Errorf("invalid --field %q, want KEY=VALUE", f)
+	return fmt.Errorf("invalid --field %q, want KEY", f)
 }
 
 func errNoFields() error {
-	return fmt.Errorf("no fields provided; use --field KEY=VALUE, --from-json or --from-dotenv")
+	return fmt.Errorf("no fields provided; use --field KEY, --from-dotenv or --from-json")
 }
 
 // dedupeStrings removes duplicates, preserving first-seen order.
@@ -58,7 +58,8 @@ func sortedMapKeys(m map[string]string) []string {
 func parseJSONObject(s string) (map[string]string, error) {
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(s), &raw); err != nil {
-		return nil, fmt.Errorf("invalid JSON object: %w", err)
+		// Not wrapped: a JSON syntax error can quote part of the input.
+		return nil, fmt.Errorf("invalid JSON object")
 	}
 	out := make(map[string]string, len(raw))
 	for k, v := range raw {

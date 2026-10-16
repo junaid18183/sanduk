@@ -29,10 +29,25 @@ func newAddCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			if envName != "" {
-				if err := vault.ValidateEnvName(envName); err != nil {
+			if err := vault.ValidateEntryName(name); err != nil {
+				return err
+			}
+			// Check the name the secret will actually be exposed as: --as, an
+			// existing mapping, or the upper-cased entry name. Without this,
+			// `sanduk add ld_preload` would become LD_PRELOAD in every child.
+			exposed := envName
+			if exposed == "" {
+				cfg, _, err := loadConfig()
+				if err != nil {
 					return err
 				}
+				exposed = cfg.EnvNameForSecret(name)
+			}
+			if err := vault.ValidateEnvName(exposed); err != nil {
+				if envName == "" {
+					return fmt.Errorf("%w; pass --as to choose a different variable name", err)
+				}
+				return err
 			}
 
 			v, err := vault.New()

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/junaid18183/sanduk/vault"
@@ -44,14 +46,34 @@ func TestDescribeUsesMetadataOnly(t *testing.T) {
 }
 
 func TestParseFieldFlags(t *testing.T) {
-	got, err := parseFieldFlags([]string{"A=1", "B=two=three"})
+	got, err := parseFieldFlags([]string{"A", "B"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["A"] != "1" || got["B"] != "two=three" {
+	if len(got) != 2 || got[0] != "A" || got[1] != "B" {
 		t.Fatalf("unexpected fields: %v", got)
 	}
-	if _, err := parseFieldFlags([]string{"NOEQUALS"}); err == nil {
-		t.Fatal("expected error for a field without '='")
+	// A value on the command line is visible in ps; it must be refused, and
+	// the error must not echo it.
+	_, err = parseFieldFlags([]string{"A=sk-test-value"})
+	if err == nil {
+		t.Fatal("expected an error for --field KEY=VALUE")
+	}
+	if strings.Contains(err.Error(), "sk-test-value") {
+		t.Fatalf("error leaks the value: %v", err)
+	}
+}
+
+func TestReadJSONSourceRefusesInline(t *testing.T) {
+	if _, err := readJSONSource(`{"A":"sk-test-value"}`); err == nil {
+		t.Fatal("inline JSON must be refused")
+	}
+	path := filepath.Join(t.TempDir(), "f.json")
+	if err := writeFileString(path, `{"A":"1"}`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readJSONSource(path)
+	if err != nil || got["A"] != "1" {
+		t.Fatalf("readJSONSource(file) = %v, %v", got, err)
 	}
 }

@@ -1,0 +1,65 @@
+# Changelog
+
+sanduk is pre-1.0 (`0.0.x`). A release may change behaviour when that closes a
+security hole; each such change is listed under **Breaking**.
+
+## Unreleased
+
+### Security
+
+- **Shell injection through `export`.** Variable names are now validated before
+  `export` prints them (shell and dotenv print names unquoted), and before `exec`
+  hands them to a child. `ParseDotenv` rejects keys that are not plain
+  identifiers, so `import` cannot store a name like `X;curl …|sh;Y`.
+- **Loader-variable block was bypassable.** The check now applies to every name
+  that reaches a child, not only group fields: flat secrets (`add ld_preload`
+  used to become `LD_PRELOAD`), `ENVVAR=entry` bindings, `import`, and
+  config.toml `env` mappings. The deny-list now covers the `LD_*`, `DYLD_*`,
+  `GIT_CONFIG_*` and `SANDUK_*` families plus `PYTHONPATH`, `PERL5LIB`,
+  `JAVA_TOOL_OPTIONS`, `GIT_SSH_COMMAND`, `PROMPT_COMMAND`, `IFS`, `GCONV_PATH`
+  and others.
+- **Secrets could be split across keystores.** With no backend set, sanduk
+  offered every native backend to the keyring library, which silently moves on
+  when one fails to open; on Linux a Secret Service hiccup could put new secrets
+  in kwallet or pass. Exactly one platform keystore is now used, and failing to
+  open it is an error.
+- **Project approval read the file twice.** The approval hash is now of the
+  exact bytes that were parsed, so swapping `.sanduk.toml` between the parse and
+  the check no longer passes. `doctor` now requires approval too.
+- **Trust store relocation.** A trust store inside the project it would approve,
+  or one readable/writable by group or others, is refused; a repository's
+  `.envrc` can no longer point `SANDUK_TRUST` at a file it ships.
+- **Planted project files.** A `.sanduk.toml` that is world-writable or owned by
+  another user (for example in `/tmp`) is refused.
+- **Empty entry names** are rejected. In the `keychain-biometric` backend an
+  empty name matched every item, so `remove ""` could delete the whole vault.
+  The biometric `Set` now builds the replacement before deleting the old item.
+- **Windows:** `SANDUK_*` variables are stripped from the child environment in
+  any letter case.
+- `--service` / `SANDUK_SERVICE` is validated as a name, so it cannot place the
+  age file outside its directory.
+- Parse errors no longer echo text that may be part of a secret.
+- The age backend confirms the passphrase when the vault file is empty (as when
+  it is missing) and warns when the file is readable by group or others.
+
+### Breaking
+
+- `add-group --field KEY=VALUE` is refused; `--field KEY` now prompts for the
+  value with echo off. `--from-json` takes a file path or `-` (stdin) instead of
+  inline JSON. Values on the command line are visible in `ps`.
+- Variable names that change how a child process runs (see above) are refused
+  everywhere. An existing entry that uses one still loads, so it can be fixed or
+  removed, but `exec`/`export` refuse it until then; `--except NAME` works around
+  it in the meantime.
+- `.env` files with keys that are not `[A-Za-z_][A-Za-z0-9_]*` no longer parse
+  (`import`, `add-group --from-dotenv`, `group set --from-dotenv`, `doctor`
+  templates).
+- With no backend set, Linux uses the Secret Service only; select `kwallet` or
+  `pass` with `--backend`. A failure to open the keystore is now an error.
+- `export -o FILE` refuses to replace an existing file unless `--force` is given.
+- `export --format dotenv` refuses a value containing `$` together with a single
+  quote or a newline, which no dotenv quoting can represent without the reader
+  expanding the `$`. Use `--format json` or `exec`.
+- `doctor` without an entry argument requires the `.sanduk.toml` to be approved.
+- A trust store with mode other than 0600 (group/other bits set) is refused;
+  fix with `chmod 600` on it.

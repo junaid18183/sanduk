@@ -29,7 +29,7 @@ func defaultEntry() (entry string, only []string, err error) {
 		return "", nil, fmt.Errorf("no entry given and no %s found in this directory or its parents",
 			vault.ProjectFileName)
 	}
-	if err := requireTrustedProject(path, proj.Entry); err != nil {
+	if err := requireTrustedProject(path, proj); err != nil {
 		return "", nil, err
 	}
 	return proj.Entry, proj.Only, nil
@@ -37,14 +37,14 @@ func defaultEntry() (entry string, only []string, err error) {
 
 // requireTrustedProject refuses an unapproved (or edited) project file and tells
 // the user how to approve it.
-func requireTrustedProject(path, entry string) error {
-	ok, err := vault.IsProjectTrusted(path)
+func requireTrustedProject(path string, proj *vault.Project) error {
+	ok, err := vault.IsProjectTrusted(proj)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return fmt.Errorf("%s is not approved; review it, then run \"sanduk allow\" to trust entry %q",
-			path, entry)
+			path, proj.Entry)
 	}
 	return nil
 }

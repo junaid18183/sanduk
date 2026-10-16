@@ -33,6 +33,11 @@ func ParseDotenv(b []byte) (map[string]string, error) {
 		if key == "" {
 			return nil, fmt.Errorf("line %d: empty key", i+1)
 		}
+		if !ValidEnvName(key) {
+			// Keys become environment variable names, which export prints
+			// unquoted, so anything but a plain identifier is rejected here.
+			return nil, fmt.Errorf("line %d: invalid key %q (want [A-Za-z_][A-Za-z0-9_]*)", i+1, key)
+		}
 
 		value, consumed, err := readDotenvValue(rest, lines[i+1:])
 		if err != nil {
@@ -95,7 +100,8 @@ func readQuotedValue(v string, following []string) (string, int, error) {
 			}
 			tail := strings.TrimSpace(body[end+1:])
 			if tail != "" && !strings.HasPrefix(tail, "#") {
-				return "", 0, fmt.Errorf("unexpected text after closing quote: %q", tail)
+				// The tail is not echoed: it may be part of a mis-quoted secret.
+				return "", 0, fmt.Errorf("unexpected text after closing quote")
 			}
 			return full, consumed, nil
 		}

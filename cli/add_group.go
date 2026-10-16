@@ -3,22 +3,52 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 
 	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
 )
 
-// parseFieldFlags turns repeated KEY=VALUE flags into a map.
-func parseFieldFlags(fields []string) (map[string]string, error) {
-	out := make(map[string]string, len(fields))
+// parseFieldFlags turns repeated --field KEY flags into field names. A value is
+// never accepted on the command line: argv is visible to every process on the
+// machine (ps) and lands in shell history, so KEY=VALUE is refused and each
+// named field is prompted for instead.
+func parseFieldFlags(fields []string) ([]string, error) {
+	out := make([]string, 0, len(fields))
 	for _, f := range fields {
-		k, v, ok := cut(f, '=')
-		if !ok || k == "" {
+		if k, _, ok := strings.Cut(f, "="); ok {
+			return nil, fmt.Errorf("--field %s=...: a value on the command line is visible in process listings; "+
+				"pass --field %s to be prompted, or use --from-dotenv or --from-json -", k, k)
+		}
+		if f == "" {
 			return nil, errInvalidField(f)
 		}
-		out[k] = v
+		out = append(out, f)
 	}
 	return out, nil
+}
+
+// readJSONSource reads a JSON object of fields from a file, or from stdin when
+// src is "-". Inline JSON is refused for the same reason as --field KEY=VALUE.
+func readJSONSource(src string) (map[string]string, error) {
+	if strings.HasPrefix(strings.TrimSpace(src), "{") {
+		return nil, fmt.Errorf("--from-json takes a file or - (stdin), not inline JSON: argv is visible in process listings")
+	}
+	var (
+		b   []byte
+		err error
+	)
+	if src == "-" {
+		b, err = io.ReadAll(os.Stdin)
+	} else {
+		b, err = os.ReadFile(src)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return parseJSONObject(string(b))
 }
 
 func newAddGroupCmd() *cobra.Command {
@@ -36,9 +66,10 @@ func newAddGroupCmd() *cobra.Command {
 		Short: "Create a grouped secret",
 		Long: "Create a group: several named fields stored as one vault entry. Field names\n" +
 			"are the environment variable names used by exec and export.\n\n" +
-			"Values may be supplied with repeated --field K=V, --from-json, or --from-dotenv\n" +
-			"(a .env file). When more than one source is given, --field overrides\n" +
-			"--from-dotenv, which overrides --from-json.\n\n" +
+			"Values come from --from-dotenv (a .env file), --from-json (a file, or - for\n" +
+			"stdin), or repeated --field KEY, which prompts for KEY's value with echo off.\n" +
+			"Values are never taken from argv. When more than one source is given,\n" +
+			"--field overrides --from-dotenv, which overrides --from-json.\n\n" +
 			"An existing entry is never replaced silently: use \"sanduk group set\" to merge\n" +
 			"fields, or pass --replace to overwrite the whole entry.",
 		Args: cobra.ExactArgs(1),
@@ -50,8 +81,16 @@ func newAddGroupCmd() *cobra.Command {
 			}
 
 			m := map[string]string{}
+			fieldKeys, err := parseFieldFlags(fields)
+			if err != nil {
+				return err
+			}
+			if fromJSON == "-" && len(fieldKeys) > 0 {
+				return fmt.Errorf("--from-json - reads stdin, so it cannot be combined with --field prompts")
+			}
+
 			if fromJSON != "" {
-				parsed, err := parseJSONObject(fromJSON)
+				parsed, err := readJSONSource(fromJSON)
 				if err != nil {
 					return err
 				}
@@ -68,21 +107,19 @@ func newAddGroupCmd() *cobra.Command {
 					m[k] = v
 				}
 			}
-			fromFlags, err := parseFieldFlags(fields)
-			if err != nil {
-				return err
-			}
-			for k, v := range fromFlags {
-				m[k] = v
-			}
-
-			if len(m) == 0 {
-				return errNoFields()
+			// Validate the prompted names before asking for any value.
+			for _, k := range fieldKeys {
+				if err := vault.ValidateEnvName(k); err != nil {
+					return err
+				}
 			}
 			for k := range m {
 				if err := vault.ValidateEnvName(k); err != nil {
 					return err
 				}
+			}
+			if len(m) == 0 && len(fieldKeys) == 0 {
+				return errNoFields()
 			}
 
 			v, err := vault.New()
@@ -102,6 +139,14 @@ func newAddGroupCmd() *cobra.Command {
 				return gerr
 			}
 
+			for _, k := range fieldKeys {
+				val, err := readGroupFieldValue(k, false)
+				if err != nil {
+					return err
+				}
+				m[k] = val
+			}
+
 			if err := v.AddGroup(name, m); err != nil {
 				return err
 			}
@@ -115,8 +160,8 @@ func newAddGroupCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringArrayVar(&fields, "field", nil, "add a field as KEY=VALUE (repeatable)")
-	cmd.Flags().StringVar(&fromJSON, "from-json", "", "JSON object of fields")
+	cmd.Flags().StringArrayVar(&fields, "field", nil, "add field KEY, prompting for its value (repeatable)")
+	cmd.Flags().StringVar(&fromJSON, "from-json", "", "read a JSON object of fields from a file, or - for stdin")
 	cmd.Flags().StringVar(&fromDotenv, "from-dotenv", "", "read fields from a .env file")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "deprecated: use --from-dotenv")
 	cmd.Flags().StringVar(&descFlag, "description", "", "human-readable description")

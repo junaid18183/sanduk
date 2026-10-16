@@ -143,8 +143,8 @@ Break these and you break the tool's security model:
 3. **Secret values are never accepted as command-line arguments** (argv is
    visible in process listings). Input comes from an echo-off prompt, `--from-env`,
    `--from-file`, or stdin. `group set` deliberately has no VALUE position for
-   this reason. `add-group --field K=V` and `--from-json` are the known
-   exceptions, kept for convenience — don't copy that shape into new commands.
+   this reason, and `add-group --field KEY=VALUE` / inline `--from-json` are
+   refused (`--field KEY` prompts; `--from-json` takes a file or `-`).
 4. **`get` is terminal-gated; `export` is not.** `get` refuses to write to a
    non-terminal unless `--force` is given. `export` is the sanctioned scripting
    interface and must keep working in pipes.
@@ -162,7 +162,11 @@ Break these and you break the tool's security model:
 8. **Never let the library's own file backend be selectable.** Its opener cannot
    fail, so it shadows a missing native keystore and then errors on the first
    read with "No directory provided for file keyring". `nativeBackends()`
-   filters it out and sanduk falls back to its own age backend instead.
+   filters it out. With no backend set, `defaultNativeBackend()` offers
+   `keyring.Open` **exactly one** backend per OS (keychain / wincred /
+   secret-service): `Open` silently tries the next allowed backend on failure,
+   so offering several would split the vault across stores. Only when that one
+   is not compiled in does sanduk fall back to its own age backend.
 9. **`.sanduk.toml` is non-secret, and only ever names an entry.** It is
    committed to repositories, so it must never grow a value field. It supplies
    the default entry plus an optional key subset (`only`), nothing more.
@@ -188,15 +192,23 @@ Break these and you break the tool's security model:
     injection), and the output order is sorted, not map-ordered.
 14. **`.sanduk.toml` is untrusted until approved.** `defaultEntry` refuses a
     project file that is not in the trust store with a matching content hash, so
-    a cloned repository cannot choose which entry `exec`/`export` injects. The
-    store is `trusted.toml` (non-secret); editing the file revokes approval.
+    a cloned repository cannot choose which entry `exec`/`export`/`doctor` uses.
+    The hash is of the bytes `LoadProject` parsed (`Project.Hash()`), never a
+    second read. The store is `trusted.toml` (non-secret, mode 0600); a store
+    inside the project, or one readable by group/other, is refused, since
+    `SANDUK_TRUST`/`SANDUK_CONFIG` can move it.
 15. **Destructive writes are never the default.** `add-group`/`import --group`
     refuse to overwrite an existing group without `--replace`; `add` refuses to
     turn a group into a flat secret without `--replace`; `remove` requires `--yes`
     when stdin is not a terminal. Failing closed matters more than convenience.
-16. **Group field names are validated on write** (`vault.ValidateEnvName`), so a
-    name with a space, or a loader-affecting name such as `LD_PRELOAD`, cannot be
-    stored and later injected into a child. File writes go through
+16. **Every variable name is validated on write and again on output**
+    (`vault.ValidateEnvName`): in `vault.Exec` and `vault.FormatEnv`, which every
+    name passes through after `--only`/`--except`. That covers group fields, flat
+    secret names, `ENVVAR=entry` bindings and config.toml mappings, and stops
+    shell injection through `export`, which prints names unquoted. `ParseDotenv`
+    rejects non-identifier keys. Don't add an output path that bypasses those
+    two functions. Entry names are checked by `vault.ValidateEntryName` (an empty
+    name matches every item in the biometric backend). File writes go through
     `vault.WriteFileAtomic`, and the age backend takes a cross-process lock
     (`filelock_*.go`) around read-modify-write.
 

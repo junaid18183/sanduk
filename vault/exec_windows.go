@@ -12,6 +12,9 @@ import (
 // Exec runs command as a child process, injecting env as environment
 // variables. Windows has no execve, so the parent waits for the child.
 func Exec(name string, args []string, env map[string]string) error {
+	if err := validateEnvNames(env); err != nil {
+		return err
+	}
 	cmd := exec.Command(name, args...)
 	cmd.Env = buildEnv(env)
 	cmd.Stdin = os.Stdin

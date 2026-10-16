@@ -26,8 +26,26 @@ func New() (*Vault, error) {
 	return &Vault{kr: kr}, nil
 }
 
+// ValidateEntryName rejects names that cannot safely address one entry. An empty
+// name matters most: some backends treat a missing account as "match every
+// item", so removing "" could delete the whole vault.
+func ValidateEntryName(name string) error {
+	if name == "" {
+		return errors.New("entry name must not be empty")
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("entry name %q contains a control character", name)
+		}
+	}
+	return nil
+}
+
 // Get returns the secret entry stored under name.
 func (v *Vault) Get(name string) (*Entry, error) {
+	if err := ValidateEntryName(name); err != nil {
+		return nil, err
+	}
 	item, err := v.kr.Get(name)
 	if err != nil {
 		if errors.Is(err, keyring.ErrKeyNotFound) {
@@ -40,6 +58,9 @@ func (v *Vault) Get(name string) (*Entry, error) {
 
 // put writes an entry to the keychain.
 func (v *Vault) put(name string, e *Entry) error {
+	if err := ValidateEntryName(name); err != nil {
+		return err
+	}
 	b, err := e.Marshal()
 	if err != nil {
 		return err
@@ -147,6 +168,9 @@ func (v *Vault) GroupFieldNames(name string) ([]string, error) {
 
 // Remove deletes an entry.
 func (v *Vault) Remove(name string) error {
+	if err := ValidateEntryName(name); err != nil {
+		return err
+	}
 	if err := v.kr.Remove(name); err != nil {
 		if errors.Is(err, keyring.ErrKeyNotFound) {
 			return fmt.Errorf("%w: %s", ErrNotFound, name)

@@ -54,6 +54,14 @@ func newImportCmd() *cobra.Command {
 				return nil
 			}
 
+			// Validate every key before writing anything, so a bad name cannot
+			// leave the import half done.
+			for _, k := range keys {
+				if err := vault.ValidateEnvName(k); err != nil {
+					return fmt.Errorf("%s: %w", path, err)
+				}
+			}
+
 			v, err := vault.New()
 			if err != nil {
 				return err
