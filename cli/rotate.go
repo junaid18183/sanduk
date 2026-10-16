@@ -31,7 +31,7 @@ func newRotateCmd() *cobra.Command {
 				return err
 			}
 			if e.Type != vault.TypeSecret {
-				return fmt.Errorf("%q is a group; update it with add-group", name)
+				return fmt.Errorf("%q is a group; update it field by field with \"sanduk group set\"", name)
 			}
 
 			value, err := readSecret(fromEnv, fromFile, true)
@@ -49,5 +49,7 @@ func newRotateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&fromEnv, "from-env", "", "read the new value from this environment variable")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "read the new value from this file")
+	cmd.MarkFlagsMutuallyExclusive("from-env", "from-file")
+	cmd.ValidArgsFunction = completeEntryNames
 	return cmd
 }

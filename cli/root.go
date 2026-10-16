@@ -17,6 +17,9 @@ var backendFlag string
 // keychainFlag is bound to the persistent --keychain flag.
 var keychainFlag string
 
+// serviceFlag is bound to the persistent --service flag.
+var serviceFlag string
+
 // Execute builds and runs the root command.
 func Execute() error {
 	root := newRootCmd()
@@ -34,6 +37,7 @@ func newRootCmd() *cobra.Command {
 		Long: "sanduk stores API keys and other secrets in your operating system's\n" +
 			"secure keystore, then exposes them to the processes that need them — on\n" +
 			"demand, without writing plaintext secrets to disk.",
+		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -61,6 +65,8 @@ func newRootCmd() *cobra.Command {
 		"keyring backend: keychain, keychain-biometric, secret-service, wincred, kwallet, pass, file, age")
 	root.PersistentFlags().StringVar(&keychainFlag, "keychain", "",
 		"macOS keychain to use (default \"login\"; a dedicated keychain is created on first write)")
+	root.PersistentFlags().StringVar(&serviceFlag, "service", "",
+		"keystore service name, also the age file name (default \"sanduk\")")
 
 	root.AddCommand(
 		newAddCmd(),
@@ -73,6 +79,7 @@ func newRootCmd() *cobra.Command {
 		newExecCmd(),
 		newExportCmd(),
 		newImportCmd(),
+		newAllowCmd(),
 		newDoctorCmd(),
 		newConfigCmd(),
 		newVersionCmd(),

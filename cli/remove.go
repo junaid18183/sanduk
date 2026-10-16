@@ -14,11 +14,19 @@ func newRemoveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove <name>",
 		Short: "Remove an entry from the vault",
-		Args:  cobra.ExactArgs(1),
+		Long: "Remove an entry from the vault. A confirmation is required: with a terminal\n" +
+			"it is asked interactively, and without one you must pass --yes.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			if !yes && vault.IsTerminal(os.Stdin) {
+			if !yes {
+				// Fail closed: without a terminal there is no way to confirm, so
+				// require an explicit --yes rather than deleting silently in a
+				// pipe or an agent session.
+				if !vault.IsTerminal(os.Stdin) {
+					return fmt.Errorf("refusing to remove %q without --yes (stdin is not a terminal)", name)
+				}
 				answer, err := promptLine(fmt.Sprintf("Remove %q? [y/N] ", name))
 				if err != nil {
 					return err
@@ -48,6 +56,7 @@ func newRemoveCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&yes, "yes", false, "skip the confirmation prompt")
+	cmd.Flags().BoolVar(&yes, "yes", false, "confirm removal non-interactively")
+	cmd.ValidArgsFunction = completeEntryNames
 	return cmd
 }

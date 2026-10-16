@@ -21,7 +21,10 @@ cli/                    one file per cobra command, registered in cli/root.go
   util.go               shared helpers (field parsing, metadata recording)
   selector.go           exec/export selectors (entry or ENVVAR=entry) + --only filter
   project.go            resolves .sanduk.toml into a default entry
-  group.go              group set/unset/show, the field-level edit path
+  group.go              group set/unset/show/get, the field-level edit path
+  get.go                get (--field/--all/--reveal) and the terminal gate
+  allow.go              approve a repository's .sanduk.toml
+  completion.go         shell-completion helpers (entry-name completion)
   doctor.go             compares a group against .env.example
   settings.go           resolves backend settings (flag > env > config) for every command
   *_test.go             command-level tests
@@ -35,10 +38,15 @@ vault/                  all domain logic; no cobra imports here
   backend_biometric_*   macOS Touch ID backend (darwin+cgo) and its stub
   exec_unix.go          execve-based secret injection
   exec_windows.go       child-process variant for Windows
-  exec_env.go           environment merging
+  exec_env.go           environment merging (strips SANDUK_* from the child)
   format.go             shell/dotenv/json output
-  dotenv.go             .env parsing
-  redact.go, tty.go     display helpers
+  dotenv.go             .env parsing (inline comments, multi-line quoted values)
+  atomic.go             WriteFileAtomic: temp + fsync + rename
+  filelock_unix.go      flock-based cross-process lock (stub on Windows)
+  envname.go            environment-variable name validation
+  project.go            .sanduk.toml discovery
+  trust.go              the per-user project-approval store (trusted.toml)
+  redact.go             IsTerminal + Redact display helpers
 .github/workflows/      ci.yml (checks) and release.yml (GoReleaser on v* tags)
 .goreleaser.yml         release configuration
 examples/               config.toml.example, plus project/ — a runnable starter project
@@ -78,6 +86,7 @@ go test ./vault -run TestNativeBackendsIncludesKeychainOnMacOS
 | `SANDUK_KEYCHAIN_PASSPHRASE` | Password used only when creating a dedicated keychain. |
 | `SANDUK_SERVICE` | Keychain service name; default `sanduk`. Also names the age file. |
 | `SANDUK_CONFIG` | Metadata config path; default `~/.config/sanduk/config.toml`. |
+| `SANDUK_TRUST` | Project-approval store; default `trusted.toml` next to the config. |
 | `SANDUK_FILE_DIR` | Directory of the age vault; default `~/.local/share/sanduk`. |
 | `SANDUK_FILE_PASSPHRASE` | Passphrase for the age backend (non-interactive). |
 | `./.sanduk.toml` | Committed project file: `entry` and optional `only`. Non-secret. |
@@ -126,7 +135,8 @@ It stores a group literally named `demo`, so `make clean` removes it again.
 Break these and you break the tool's security model:
 
 1. **Secrets live only in the backend; metadata lives only in the config.**
-   `~/.config/sanduk/config.toml` must never contain a secret value.
+   `~/.config/sanduk/config.toml` (and the `trusted.toml` trust store) must never
+   contain a secret value.
 2. **`list` must never read secret values.** It combines backend `Keys()` with
    config metadata (entry type, env mapping, description). Adding a value read to
    the list path is a regression.
@@ -171,6 +181,24 @@ Break these and you break the tool's security model:
     came `from env`. A broken config must not brick `sanduk config` — it is how
     you inspect the config — so the failure lands in `settingsErr` and the
     commands that need the config report it themselves.
+13. **`exec` never hands the child a `SANDUK_*` variable.** `buildEnv` drops the
+    prefix from the inherited environment, because `SANDUK_FILE_PASSPHRASE` and
+    `SANDUK_KEYCHAIN_PASSPHRASE` each unlock the whole vault; leaking one would
+    defeat `--only`. Overrides may still set any name (that is an explicit
+    injection), and the output order is sorted, not map-ordered.
+14. **`.sanduk.toml` is untrusted until approved.** `defaultEntry` refuses a
+    project file that is not in the trust store with a matching content hash, so
+    a cloned repository cannot choose which entry `exec`/`export` injects. The
+    store is `trusted.toml` (non-secret); editing the file revokes approval.
+15. **Destructive writes are never the default.** `add-group`/`import --group`
+    refuse to overwrite an existing group without `--replace`; `add` refuses to
+    turn a group into a flat secret without `--replace`; `remove` requires `--yes`
+    when stdin is not a terminal. Failing closed matters more than convenience.
+16. **Group field names are validated on write** (`vault.ValidateEnvName`), so a
+    name with a space, or a loader-affecting name such as `LD_PRELOAD`, cannot be
+    stored and later injected into a child. File writes go through
+    `vault.WriteFileAtomic`, and the age backend takes a cross-process lock
+    (`filelock_*.go`) around read-modify-write.
 
 ## Coding conventions
 

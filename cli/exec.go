@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/junaid18183/sanduk/vault"
@@ -9,7 +10,11 @@ import (
 )
 
 func newExecCmd() *cobra.Command {
-	var only []string
+	var (
+		only   []string
+		except []string
+		list   bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "exec [selector...] [--] <command> [args...]",
@@ -26,6 +31,8 @@ func newExecCmd() *cobra.Command {
 			"  sanduk exec BASE=base warden -- pnpm dev    # later selector wins\n" +
 			"  sanduk exec warden --only DB_URL -- psql\n" +
 			"  sanduk exec -- pnpm dev                     # entry from " + vault.ProjectFileName + "\n\n" +
+			"--list prints the variable names that would be injected, never their values,\n" +
+			"and runs nothing.\n\n" +
 			"Without `--`, a single selector is accepted, then the command.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -63,6 +70,15 @@ func newExecCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			env = filterExcept(env, except)
+
+			if list {
+				for _, k := range sortedMapKeys(env) {
+					fmt.Fprintln(os.Stdout, k)
+				}
+				warnf("%d variable(s) would be injected; nothing was run\n", len(env))
+				return nil
+			}
 
 			if err := vault.Exec(command[0], command[1:], env); err != nil {
 				if strings.Contains(command[0], "=") {
@@ -77,6 +93,11 @@ func newExecCmd() *cobra.Command {
 
 	cmd.Flags().StringArrayVar(&only, "only", nil,
 		"inject only these keys (comma-separated, repeatable)")
+	cmd.Flags().StringArrayVar(&except, "except", nil,
+		"exclude these keys (comma-separated, repeatable)")
+	cmd.Flags().BoolVar(&list, "list", false,
+		"print the variable names that would be injected, without running anything")
+	cmd.ValidArgsFunction = completeSelector
 	return cmd
 }
 

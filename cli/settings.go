@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"runtime"
 
 	"github.com/junaid18183/sanduk/vault"
 )
@@ -54,7 +55,13 @@ func resolveSettings() (*settings, error) {
 	// also expresses as an empty SANDUK_BACKEND.
 	s.Backend, s.BackendFrom = resolveSetting(backendFlag, "SANDUK_BACKEND", cfg.Backend, "")
 	s.Keychain, s.KeychainFrom = resolveSetting(keychainFlag, "SANDUK_KEYCHAIN", cfg.Keychain, vault.DefaultKeychainName())
-	s.Service, s.ServiceFrom = resolveSetting("", "SANDUK_SERVICE", cfg.Service, vault.DefaultService())
+	s.Service, s.ServiceFrom = resolveSetting(serviceFlag, "SANDUK_SERVICE", cfg.Service, vault.DefaultService())
+
+	// A keychain name is only meaningful on macOS. Warn rather than silently
+	// ignore it, so a copied-over setting does not look effective.
+	if runtime.GOOS != "darwin" && s.KeychainFrom != sourceDefault {
+		warnf("sanduk: --keychain/SANDUK_KEYCHAIN is only used on macOS; ignoring %q\n", s.Keychain)
+	}
 	return s, nil
 }
 

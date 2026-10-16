@@ -123,6 +123,7 @@ func newDoctorCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&template, "template", "",
 		"template file to compare against (default "+defaultTemplateName+")")
+	cmd.ValidArgsFunction = completeEntryNames
 	return cmd
 }
 

@@ -155,11 +155,17 @@ func TestDefaultEntryFailsWithoutProjectFile(t *testing.T) {
 
 func TestDefaultEntryFromProjectFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeFileString(filepath.Join(dir, vault.ProjectFileName),
-		"entry = \"warden\"\nonly = [\"DB_URL\"]\n"); err != nil {
+	path := filepath.Join(dir, vault.ProjectFileName)
+	if err := writeFileString(path, "entry = \"warden\"\nonly = [\"DB_URL\"]\n"); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
+	// A project file must be approved before it is used; approve it as
+	// `sanduk allow` would, writing the trust store to a temporary config dir.
+	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	if _, err := vault.ApproveProject(path); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
 
 	entry, only, err := defaultEntry()
 	if err != nil {
@@ -170,5 +176,39 @@ func TestDefaultEntryFromProjectFile(t *testing.T) {
 	}
 	if len(only) != 1 || only[0] != "DB_URL" {
 		t.Fatalf("only = %v, want [DB_URL]", only)
+	}
+}
+
+func TestDefaultEntryRequiresApproval(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeFileString(filepath.Join(dir, vault.ProjectFileName), "entry = \"warden\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+
+	if _, _, err := defaultEntry(); err == nil {
+		t.Fatal("expected an unapproved project file to be refused")
+	}
+}
+
+func TestDefaultEntryApprovalRevokedByEdit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, vault.ProjectFileName)
+	if err := writeFileString(path, "entry = \"warden\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	if _, err := vault.ApproveProject(path); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	// Editing the file must revoke the approval.
+	if err := writeFileString(path, "entry = \"aws-prod\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := defaultEntry(); err == nil {
+		t.Fatal("expected an edited project file to require re-approval")
 	}
 }

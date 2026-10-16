@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/junaid18183/sanduk/vault"
@@ -27,7 +28,31 @@ func errInvalidField(f string) error {
 }
 
 func errNoFields() error {
-	return fmt.Errorf("no fields provided; use --field KEY=VALUE, --from-json or --from-file")
+	return fmt.Errorf("no fields provided; use --field KEY=VALUE, --from-json or --from-dotenv")
+}
+
+// dedupeStrings removes duplicates, preserving first-seen order.
+func dedupeStrings(items []string) []string {
+	seen := make(map[string]bool, len(items))
+	out := make([]string, 0, len(items))
+	for _, s := range items {
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+// sortedMapKeys returns a map's keys, sorted.
+func sortedMapKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func parseJSONObject(s string) (map[string]string, error) {

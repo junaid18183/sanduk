@@ -71,19 +71,16 @@ func LoadConfig(path string) (*Config, error) {
 	return c, nil
 }
 
-// SaveConfig writes the config file with restrictive permissions.
+// SaveConfig writes the config file with restrictive permissions. The write is
+// atomic, so a crash mid-save cannot truncate the metadata of every entry, and
+// two concurrent writers cannot leave a half-written file behind.
 func SaveConfig(path string, c *Config) error {
-	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
-	}
 	var buf bytes.Buffer
 	buf.WriteString("# sanduk config — metadata only. This file never contains secret values.\n\n")
 	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
 		return err
 	}
-	return os.WriteFile(path, buf.Bytes(), 0o600)
+	return WriteFileAtomic(path, buf.Bytes(), 0o600)
 }
 
 // EnvNameForSecret returns the environment variable a flat secret is exposed

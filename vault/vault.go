@@ -56,8 +56,14 @@ func (v *Vault) AddSecret(name, value string) error {
 	return v.put(name, &Entry{Version: entryVersion, Type: TypeSecret, Value: value})
 }
 
-// AddGroup stores (or replaces) a grouped entry.
+// AddGroup stores (or replaces) a grouped entry. Field names become child
+// environment variables, so each is validated before it is stored.
 func (v *Vault) AddGroup(name string, fields map[string]string) error {
+	for k := range fields {
+		if err := ValidateEnvName(k); err != nil {
+			return err
+		}
+	}
 	return v.put(name, &Entry{Version: entryVersion, Type: TypeGroup, Fields: fields})
 }
 
@@ -71,8 +77,8 @@ func (v *Vault) MergeGroup(name string, fields map[string]string) error {
 		return fmt.Errorf("no fields provided")
 	}
 	for k := range fields {
-		if k == "" {
-			return fmt.Errorf("empty field name")
+		if err := ValidateEnvName(k); err != nil {
+			return err
 		}
 	}
 

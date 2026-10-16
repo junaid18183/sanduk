@@ -28,13 +28,17 @@ if settings=$("$SANDUK" config 2>&1 >/dev/null); then
 fi
 
 echo
-if ! "$SANDUK" add-group "$ENTRY" --from-file demo.env \
+if ! "$SANDUK" add-group "$ENTRY" --from-dotenv demo.env \
     --description "sanduk demo project"; then
   echo >&2
   echo "That failed. If the group already exists, refresh it field by field:" >&2
-  echo "  $SANDUK group set $ENTRY --from-file demo.env" >&2
+  echo "  $SANDUK group set $ENTRY --from-dotenv demo.env" >&2
   exit 1
 fi
+
+# Approve the committed .sanduk.toml so `sanduk exec -- <cmd>` works from any
+# subdirectory without naming the entry. Editing the file revokes this.
+"$SANDUK" allow >/dev/null 2>&1 || true
 
 cat <<EOF
 

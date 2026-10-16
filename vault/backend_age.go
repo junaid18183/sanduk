@@ -51,11 +51,19 @@ type ageItem struct {
 }
 
 // passphrase resolves the passphrase once and caches it, so a single command
-// never prompts more than once.
+// never prompts more than once. When the vault is being created the passphrase
+// is asked for twice: a typo here would otherwise lock the vault under a
+// passphrase the user does not know. The confirm is a no-op for the
+// non-interactive (environment variable) source, which returns instantly.
 func (k *ageKeyring) passphrase() (string, error) {
 	if k.pass != "" {
 		return k.pass, nil
 	}
+	creating := false
+	if _, err := os.Stat(k.path); errors.Is(err, os.ErrNotExist) {
+		creating = true
+	}
+
 	p, err := k.passFunc(fmt.Sprintf("Enter passphrase for %s: ", filepath.Base(k.path)))
 	if err != nil {
 		return "", err
@@ -63,8 +71,29 @@ func (k *ageKeyring) passphrase() (string, error) {
 	if p == "" {
 		return "", errors.New("empty passphrase")
 	}
+	if creating {
+		again, err := k.passFunc(fmt.Sprintf("Confirm passphrase for %s: ", filepath.Base(k.path)))
+		if err != nil {
+			return "", err
+		}
+		if again != p {
+			return "", errors.New("passphrases do not match")
+		}
+	}
 	k.pass = p
 	return p, nil
+}
+
+// withLock runs fn while holding an OS-level exclusive lock on the vault file,
+// so two concurrent sanduk processes cannot interleave a read-modify-write and
+// lose one of the updates.
+func (k *ageKeyring) withLock(fn func() error) error {
+	lk, err := lockPath(k.path)
+	if err != nil {
+		return err
+	}
+	defer lk.release()
+	return fn()
 }
 
 func (k *ageKeyring) load() error {
@@ -150,29 +179,9 @@ func (k *ageKeyring) save() error {
 		return err
 	}
 
-	dir := filepath.Dir(k.path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".vault-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after a successful rename
-
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(buf.Bytes()); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, k.path)
+	// The temp-write, fsync and rename live in WriteFileAtomic so a crash cannot
+	// truncate the vault and a reader always sees a complete document.
+	return WriteFileAtomic(k.path, buf.Bytes(), 0o600)
 }
 
 // Get implements keyring.Keyring.
@@ -221,30 +230,38 @@ func (k *ageKeyring) Set(item keyring.Item) error {
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if err := k.load(); err != nil {
-		return err
-	}
-	k.items[item.Key] = keyring.Item{
-		Key:         item.Key,
-		Label:       item.Label,
-		Description: item.Description,
-		Data:        item.Data,
-	}
-	return k.save()
+	return k.withLock(func() error {
+		// Another process may have written since we last loaded; re-read under
+		// the lock so we merge into the current file, not a stale copy.
+		k.loaded = false
+		if err := k.load(); err != nil {
+			return err
+		}
+		k.items[item.Key] = keyring.Item{
+			Key:         item.Key,
+			Label:       item.Label,
+			Description: item.Description,
+			Data:        item.Data,
+		}
+		return k.save()
+	})
 }
 
 // Remove implements keyring.Keyring.
 func (k *ageKeyring) Remove(key string) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if err := k.load(); err != nil {
-		return err
-	}
-	if _, ok := k.items[key]; !ok {
-		return keyring.ErrKeyNotFound
-	}
-	delete(k.items, key)
-	return k.save()
+	return k.withLock(func() error {
+		k.loaded = false
+		if err := k.load(); err != nil {
+			return err
+		}
+		if _, ok := k.items[key]; !ok {
+			return keyring.ErrKeyNotFound
+		}
+		delete(k.items, key)
+		return k.save()
+	})
 }
 
 // Keys implements keyring.Keyring.

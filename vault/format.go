@@ -61,11 +61,18 @@ func shellQuote(v string) string {
 	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
 }
 
-// dotenvQuote emits v bare when it is unambiguous, otherwise double-quoted with
-// the standard escapes understood by most dotenv parsers.
+// dotenvQuote emits v bare when it is unambiguous. Values containing a `$` or a
+// `#` are single-quoted, because a double-quoted `$` is interpolated by parsers
+// such as docker compose and a `#` can start a comment; single quotes are
+// literal everywhere. Anything else is double-quoted with the standard escapes.
 func dotenvQuote(v string) string {
 	if v != "" && !strings.ContainsAny(v, " \t\n\r\"'\\$#") {
 		return v
+	}
+	// Single quotes cannot contain a single quote and cannot span lines in a
+	// portable way, so those fall through to the double-quoted form.
+	if strings.ContainsAny(v, "$#") && !strings.Contains(v, "'") && !strings.ContainsAny(v, "\n\r") {
+		return "'" + v + "'"
 	}
 	r := strings.NewReplacer(
 		"\\", "\\\\",

@@ -98,6 +98,18 @@ func OpenKeyring() (keyring.Keyring, error) {
 	switch backend {
 	case "":
 		allowed = nativeBackends()
+		if len(allowed) == 0 {
+			// No native keystore is compiled in — for example a macOS build made
+			// with CGO_ENABLED=0, which cannot include the Keychain backend. Only
+			// this case falls back to the encrypted file. A native backend that
+			// merely fails to open (a locked keyring, a transient D-Bus error)
+			// returns an error instead, so secrets are never silently split
+			// across two stores.
+			path := agePath(service)
+			fmt.Fprintf(os.Stderr,
+				"sanduk: no OS keystore compiled in, using the encrypted file backend at %s\n", path)
+			return newAgeKeyring(path, filePasswordFunc), nil
+		}
 	case "keychain":
 		allowed = []keyring.BackendType{keyring.KeychainBackend}
 	case "secret-service":
@@ -114,19 +126,10 @@ func OpenKeyring() (keyring.Keyring, error) {
 
 	cfg.AllowedBackends = allowed
 	kr, err := keyring.Open(cfg)
-	if err == nil {
-		return kr, nil
-	}
-	if backend != "" {
+	if err != nil {
 		return nil, err
 	}
-
-	// No native keystore is available — for example a macOS build made with
-	// CGO_ENABLED=0, which cannot include the Keychain backend.
-	path := agePath(service)
-	fmt.Fprintf(os.Stderr,
-		"sanduk: no OS keystore available, using the encrypted file backend at %s\n", path)
-	return newAgeKeyring(path, filePasswordFunc), nil
+	return kr, nil
 }
 
 // nativeBackends returns the compiled-in native keystores, excluding the

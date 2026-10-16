@@ -92,6 +92,28 @@ func filterOnly(env map[string]string, only []string) (map[string]string, error)
 	return out, nil
 }
 
+// filterExcept removes the named keys from env. Unlike --only, an unknown key is
+// not an error: excluding something that is not present is a harmless no-op,
+// whereas a typo in an allowlist would silently drop a secret that is needed.
+func filterExcept(env map[string]string, except []string) map[string]string {
+	keys := splitOnly(except)
+	if len(keys) == 0 {
+		return env
+	}
+	drop := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		drop[k] = true
+	}
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		if drop[k] {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 // splitOnly flattens repeated --only flags, each of which may hold a
 // comma-separated list.
 func splitOnly(flags []string) []string {

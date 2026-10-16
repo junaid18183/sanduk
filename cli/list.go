@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -10,7 +11,12 @@ import (
 )
 
 func newListCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		asJSON    bool
+		namesOnly bool
+	)
+
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List vault entries (names and metadata only, never values)",
 		Args:  cobra.NoArgs,
@@ -28,6 +34,29 @@ func newListCmd() *cobra.Command {
 				return err
 			}
 
+			if namesOnly {
+				for _, n := range names {
+					fmt.Fprintln(os.Stdout, n)
+				}
+				return nil
+			}
+
+			if asJSON {
+				type row struct {
+					Name string `json:"name"`
+					Type string `json:"type"`
+					Info string `json:"info"`
+				}
+				rows := make([]row, 0, len(names))
+				for _, name := range names {
+					typ, info := describe(cfg, name)
+					rows = append(rows, row{Name: name, Type: typ, Info: info})
+				}
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(rows)
+			}
+
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tTYPE\tENV / INFO")
 			for _, name := range names {
@@ -37,6 +66,11 @@ func newListCmd() *cobra.Command {
 			return tw.Flush()
 		},
 	}
+
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit a JSON array of entries")
+	cmd.Flags().BoolVar(&namesOnly, "names", false, "print entry names only, one per line")
+	cmd.MarkFlagsMutuallyExclusive("json", "names")
+	return cmd
 }
 
 // describe returns the entry type and display info using only metadata, so

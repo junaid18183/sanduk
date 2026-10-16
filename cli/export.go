@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 
 	"github.com/junaid18183/sanduk/vault"
@@ -11,6 +12,8 @@ func newExportCmd() *cobra.Command {
 	var (
 		format string
 		only   []string
+		except []string
+		output string
 	)
 
 	cmd := &cobra.Command{
@@ -24,8 +27,10 @@ func newExportCmd() *cobra.Command {
 			"  CREDS_JSON=$(sanduk export aws-prod --format json)\n" +
 			"  docker compose --env-file <(sanduk export warden --format dotenv) up\n" +
 			"  eval \"$(sanduk export --format shell)\"   # entry from " + vault.ProjectFileName + "\n\n" +
-			"Note that exporting into a shell puts the secrets in every child process\n" +
-			"of that shell. Prefer exec when an agent or editor shares the terminal.",
+			"Prefer --output over a shell redirect: it writes the file with mode 0600,\n" +
+			"whereas `export ... >> .env` inherits your umask (often 0644). Note that even\n" +
+			"then an exported file is a plaintext copy of the secrets; prefer exec when the\n" +
+			"values only need to reach one process.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			v, err := vault.New()
@@ -57,6 +62,19 @@ func newExportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			env = filterExcept(env, except)
+
+			if output != "" {
+				var buf bytes.Buffer
+				if err := vault.FormatEnv(&buf, env, format); err != nil {
+					return err
+				}
+				if err := vault.WriteFileAtomic(output, buf.Bytes(), 0o600); err != nil {
+					return err
+				}
+				warnf("wrote %d variable(s) to %s (mode 0600)\n", len(env), output)
+				return nil
+			}
 			return vault.FormatEnv(os.Stdout, env, format)
 		},
 	}
@@ -65,5 +83,10 @@ func newExportCmd() *cobra.Command {
 		"output format: shell, dotenv or json")
 	cmd.Flags().StringArrayVar(&only, "only", nil,
 		"export only these keys (comma-separated, repeatable)")
+	cmd.Flags().StringArrayVar(&except, "except", nil,
+		"exclude these keys (comma-separated, repeatable)")
+	cmd.Flags().StringVarP(&output, "output", "o", "",
+		"write to this file with mode 0600 instead of stdout")
+	cmd.ValidArgsFunction = completeSelector
 	return cmd
 }
