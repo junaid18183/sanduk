@@ -27,13 +27,15 @@
 #
 #   keychain            macOS login Keychain (the default on macOS)
 #   keychain-biometric  macOS, experimental: every read needs Touch ID
-#   secret-service      GNOME Keyring (default on Linux)
-#   kwallet             KDE KWallet
+#   secret-service      Secret Service: GNOME Keyring, recent KWallet (default on Linux)
+#   kwallet             KDE KWallet (only when chosen explicitly)
 #   wincred             Windows Credential Manager (default on Windows)
-#   pass                password-store
+#   pass                password-store (only when chosen explicitly)
 #   file / age          age-encrypted file, for headless or scripted use
 #
-# Leave it commented out to let the platform choose. Setting it explicitly is
+# Leave it commented out to let the platform choose. The platform default is a
+# single keystore: if it cannot be opened, sanduk reports an error rather than
+# quietly using another one. Setting it explicitly is
 # only portable to the machine that has that keystore — a config that says
 # "keychain" fails on Linux.
 #

@@ -68,6 +68,17 @@ security hole; each such change is listed under **Breaking**.
   check and `goreleaser check`. Actions are pinned to commit SHAs and kept
   current by Dependabot.
 
+### Documentation
+
+- README: a threat model; Windows, shell-completion, and backup/migration/
+  uninstall sections; release verification; a complete command and global-flag
+  reference; corrected sample output for `config` and `doctor`; troubleshooting
+  for approval, Secret Service, trust-store and broken-config errors.
+- New SECURITY.md (private vulnerability reporting) and CONTRIBUTING.md.
+- AGENTS.md describes the current layout and invariants; CLAUDE.md imports it.
+- The example project no longer uses a `SANDUK_*` variable of its own
+  (`DEMO_ENTRY` instead), and its walkthrough includes `sanduk allow`.
+
 ### Dependencies
 
 - `jose2go` 1.5.0 → 1.11.0 (GO-2023-2409; reachable only through the keyring

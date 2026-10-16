@@ -14,7 +14,7 @@ func IsTerminal(f *os.File) bool {
 }
 
 // Redact returns a display-safe representation of a secret: a mask plus the
-// last four characters. It mirrors aws-vault's FormatKeyForDisplay.
+// last four characters, enough to tell two keys apart without revealing one.
 func Redact(s string) string {
 	const keep = 4
 	if len(s) <= keep {

@@ -1,13 +1,13 @@
 # Demo project for sanduk.
 #
 # Run `make` on its own to list the targets below. The entry name comes from
-# SANDUK_ENTRY (exported by .envrc) and falls back to "demo".
+# DEMO_ENTRY (exported by .envrc) and falls back to "demo".
 #
 # Nothing in this directory is secret: the values in demo.env are dummies, and
 # no recipe ever prints a value.
 
 SANDUK ?= sanduk
-ENTRY  ?= $(or $(SANDUK_ENTRY),demo)
+ENTRY  ?= $(or $(DEMO_ENTRY),demo)
 
 .PHONY: help setup doctor show dev list add-legacy clean
 
@@ -32,7 +32,8 @@ list: ## list the entries in the vault
 	$(SANDUK) list
 
 add-legacy: ## add the key `make doctor` reports as missing
-	LEGACY_TOKEN=demo-legacy-token-not-secret $(SANDUK) group set $(ENTRY) --from-env LEGACY_TOKEN
+	@echo "$(SANDUK) group set $(ENTRY) LEGACY_TOKEN --from-env"
+	@LEGACY_TOKEN=demo-legacy-token-not-secret $(SANDUK) group set $(ENTRY) --from-env LEGACY_TOKEN
 
 clean: ## remove the demo entry from the vault
 	$(SANDUK) remove $(ENTRY) --yes

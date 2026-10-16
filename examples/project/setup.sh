@@ -7,7 +7,7 @@ set -eu
 
 # Same convention as the Makefile: override with SANDUK=/path/to/sanduk.
 SANDUK=${SANDUK:-sanduk}
-ENTRY=${SANDUK_ENTRY:-demo}
+ENTRY=${DEMO_ENTRY:-demo}
 
 cd "$(dirname "$0")"
 
