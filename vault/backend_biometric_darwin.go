@@ -114,8 +114,6 @@ static int sanduk_set(const char *service, const char *account,
 		return -1;
 	}
 
-	sanduk_delete_existing(service, account);
-
 	CFMutableDictionaryRef q = sanduk_new_query(service, account);
 	if (q == NULL) {
 		CFRelease(value);
@@ -152,6 +150,10 @@ static int sanduk_set(const char *service, const char *account,
 	} else {
 		CFDictionaryAddValue(q, kSecAttrAccessible, kSecAttrAccessibleWhenUnlockedThisDeviceOnly);
 	}
+
+	// Delete the old item only once everything needed for the replacement has
+	// been built, so a failure above cannot lose the existing secret.
+	sanduk_delete_existing(service, account);
 
 	OSStatus st = SecItemAdd(q, NULL);
 	CFRelease(q);
@@ -354,6 +356,10 @@ func (k *biometricKeyring) cStrings(account string) (*C.char, *C.char) {
 
 // Get implements keyring.Keyring. It prompts for user presence.
 func (k *biometricKeyring) Get(key string) (keyring.Item, error) {
+	if key == "" {
+		// A NULL account matches every item in the service.
+		return keyring.Item{}, errors.New("keyring: empty key")
+	}
 	svc, acc := k.cStrings(key)
 	defer C.free(unsafe.Pointer(svc))
 	defer C.free(unsafe.Pointer(acc))
@@ -380,6 +386,10 @@ func (k *biometricKeyring) Get(key string) (keyring.Item, error) {
 // GetMetadata implements keyring.Keyring using an attributes-only query, so it
 // does not trigger a user-presence prompt.
 func (k *biometricKeyring) GetMetadata(key string) (keyring.Metadata, error) {
+	if key == "" {
+		// A NULL account matches every item in the service.
+		return keyring.Metadata{}, errors.New("keyring: empty key")
+	}
 	svc, acc := k.cStrings(key)
 	defer C.free(unsafe.Pointer(svc))
 	defer C.free(unsafe.Pointer(acc))
@@ -419,6 +429,10 @@ func (k *biometricKeyring) Set(item keyring.Item) error {
 
 // Remove implements keyring.Keyring.
 func (k *biometricKeyring) Remove(key string) error {
+	if key == "" {
+		// A NULL account matches every item in the service.
+		return errors.New("keyring: empty key")
+	}
 	svc, acc := k.cStrings(key)
 	defer C.free(unsafe.Pointer(svc))
 	defer C.free(unsafe.Pointer(acc))

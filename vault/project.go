@@ -21,6 +21,13 @@ type Project struct {
 	Entry string `toml:"entry"`
 	// Only optionally narrows the default entry to a subset of its keys.
 	Only []string `toml:"only,omitempty"`
+
+	// path and hash identify the exact bytes this Project was parsed from.
+	// Approval is checked against hash rather than by reading the file again,
+	// so a file swapped between the parse and the check cannot pass as the
+	// approved one.
+	path string
+	hash string
 }
 
 // LoadProject walks up from dir and returns the nearest ProjectFileName.
@@ -38,6 +45,9 @@ func LoadProject(dir string) (string, *Project, error) {
 		b, err := os.ReadFile(path)
 		switch {
 		case err == nil:
+			if err := checkProjectOwner(path); err != nil {
+				return "", nil, err
+			}
 			var p Project
 			if err := toml.Unmarshal(b, &p); err != nil {
 				return "", nil, fmt.Errorf("%s: %w", path, err)
@@ -45,6 +55,8 @@ func LoadProject(dir string) (string, *Project, error) {
 			if p.Entry == "" {
 				return "", nil, fmt.Errorf("%s: entry is required", path)
 			}
+			p.path = path
+			p.hash = hashBytes(b)
 			return path, &p, nil
 		case !os.IsNotExist(err):
 			return "", nil, err

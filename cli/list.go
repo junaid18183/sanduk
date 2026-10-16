@@ -3,14 +3,13 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"text/tabwriter"
 
 	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
 )
 
-func newListCmd() *cobra.Command {
+func newListCmd(a *app) *cobra.Command {
 	var (
 		asJSON    bool
 		namesOnly bool
@@ -21,7 +20,7 @@ func newListCmd() *cobra.Command {
 		Short: "List vault entries (names and metadata only, never values)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := vault.New()
+			v, err := a.openVault()
 			if err != nil {
 				return err
 			}
@@ -29,14 +28,14 @@ func newListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg, _, err := loadConfig()
+			cfg, err := a.loadConfig()
 			if err != nil {
 				return err
 			}
 
 			if namesOnly {
 				for _, n := range names {
-					fmt.Fprintln(os.Stdout, n)
+					fmt.Fprintln(cmd.OutOrStdout(), n)
 				}
 				return nil
 			}
@@ -52,12 +51,12 @@ func newListCmd() *cobra.Command {
 					typ, info := describe(cfg, name)
 					rows = append(rows, row{Name: name, Type: typ, Info: info})
 				}
-				enc := json.NewEncoder(os.Stdout)
+				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
 				return enc.Encode(rows)
 			}
 
-			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tTYPE\tENV / INFO")
 			for _, name := range names {
 				typ, info := describe(cfg, name)
@@ -83,8 +82,13 @@ func describe(cfg *vault.Config, name string) (typ, info string) {
 		}
 		return "group", info
 	}
+	m, ok := cfg.Secrets[name]
+	if !ok {
+		// Without metadata the type cannot be known without reading the value.
+		return "unknown", "no metadata; run \"sanduk doctor --metadata --fix\""
+	}
 	info = cfg.EnvNameForSecret(name)
-	if m, ok := cfg.Secrets[name]; ok && m.Description != "" {
+	if m.Description != "" {
 		info = info + "  (" + m.Description + ")"
 	}
 	return "secret", info

@@ -1,8 +1,12 @@
 package vault
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,14 +16,14 @@ import (
 func newTestAgeKeyring(t *testing.T) (*ageKeyring, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "vault.age")
-	k := newAgeKeyring(path, func(string) (string, error) { return "[REDACTED]", nil })
+	k := newAgeKeyring(path, func(string) (string, error) { return "[REDACTED]", nil }, io.Discard)
 	return k, path
 }
 
 func TestAgeKeyringLifecycle(t *testing.T) {
 	k, _ := newTestAgeKeyring(t)
 
-	if _, err := k.Get("missing"); err != keyring.ErrKeyNotFound {
+	if _, err := k.Get("missing"); !errors.Is(err, keyring.ErrKeyNotFound) {
 		t.Fatalf("Get(missing) = %v, want ErrKeyNotFound", err)
 	}
 
@@ -46,7 +50,7 @@ func TestAgeKeyringLifecycle(t *testing.T) {
 	if err := k.Remove("openai"); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if err := k.Remove("openai"); err != keyring.ErrKeyNotFound {
+	if err := k.Remove("openai"); !errors.Is(err, keyring.ErrKeyNotFound) {
 		t.Fatalf("second Remove = %v, want ErrKeyNotFound", err)
 	}
 }
@@ -77,7 +81,7 @@ func TestAgeKeyringPersistenceAcrossInstances(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened := newAgeKeyring(path, func(string) (string, error) { return "[REDACTED]", nil })
+	reopened := newAgeKeyring(path, func(string) (string, error) { return "[REDACTED]", nil }, io.Discard)
 	got, err := reopened.Get("a")
 	if err != nil {
 		t.Fatalf("reopen Get: %v", err)
@@ -93,7 +97,7 @@ func TestAgeKeyringWrongPassphrase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wrong := newAgeKeyring(path, func(string) (string, error) { return "not-the-passphrase", nil })
+	wrong := newAgeKeyring(path, func(string) (string, error) { return "not-the-passphrase", nil }, io.Discard)
 	if _, err := wrong.Get("a"); err == nil {
 		t.Fatal("expected an error with the wrong passphrase")
 	}
@@ -108,18 +112,21 @@ func TestAgeKeyringMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMetadata: %v", err)
 	}
-	if meta.Item == nil || meta.Item.Label != "sanduk: openai" {
+	if meta.Item == nil || meta.Label != "sanduk: openai" {
 		t.Fatalf("metadata = %+v", meta)
 	}
-	if len(meta.Item.Data) != 0 {
+	if len(meta.Data) != 0 {
 		t.Fatal("metadata must not include the secret data")
 	}
-	if _, err := k.GetMetadata("missing"); err != keyring.ErrKeyNotFound {
+	if _, err := k.GetMetadata("missing"); !errors.Is(err, keyring.ErrKeyNotFound) {
 		t.Fatalf("GetMetadata(missing) = %v", err)
 	}
 }
 
 func TestAgeKeyringChmodsFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permission bits")
+	}
 	k, path := newTestAgeKeyring(t)
 	if err := k.Set(keyring.Item{Key: "a", Data: []byte("1")}); err != nil {
 		t.Fatal(err)
@@ -130,5 +137,36 @@ func TestAgeKeyringChmodsFile(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("vault file perm = %o, want 600", perm)
+	}
+}
+
+// The loose-permission warning goes to Options.Warn like every other notice, so
+// a caller that silences notices (shell completion) stays silent.
+func TestAgeWarningUsesWarnWriter(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permission bits")
+	}
+	o := testOptions(t)
+	var warn bytes.Buffer
+	o.Warn = &warn
+	v, err := Open(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.AddSecret("openai", "sk-test-value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(o.FileDir, o.Service+".age"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.List(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(warn.String(), "mode") {
+		t.Fatalf("permission warning did not reach Options.Warn: %q", warn.String())
 	}
 }

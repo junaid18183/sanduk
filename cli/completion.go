@@ -1,31 +1,46 @@
 package cli
 
 import (
+	"errors"
+	"io"
 	"os"
 
 	"github.com/junaid18183/sanduk/vault"
+
 	"github.com/spf13/cobra"
 )
 
-// completeEntryNames suggests vault entry names for a command's first argument.
-func completeEntryNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+// a.completeEntryNames suggests vault entry names for a command's first argument.
+func (a *app) completeEntryNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	return entryNames(), cobra.ShellCompDirectiveNoFileComp
+	return a.entryNames(), cobra.ShellCompDirectiveNoFileComp
 }
 
-// completeSelector suggests entry names for exec/export selectors, which start
+// a.completeSelector suggests entry names for exec/export selectors, which start
 // as a bare entry name.
-func completeSelector(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	return entryNames(), cobra.ShellCompDirectiveNoFileComp
+func (a *app) completeSelector(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	return a.entryNames(), cobra.ShellCompDirectiveNoFileComp
 }
 
-func entryNames() []string {
-	if !completionCanReadVault() {
+// entryNames lists entry names for completion. It must never prompt — a prompt
+// would corrupt the shell's completion output — so the age passphrase comes
+// only from SANDUK_FILE_PASSPHRASE; without it, completion offers nothing.
+func (a *app) entryNames() []string {
+	s := a.resolved()
+	if a.settingsErr != nil {
 		return nil
 	}
-	v, err := vault.New()
+	o := a.options(s)
+	o.PassFunc = func(string) (string, error) {
+		if p := os.Getenv("SANDUK_FILE_PASSPHRASE"); p != "" {
+			return p, nil
+		}
+		return "", errors.New("no passphrase available without prompting")
+	}
+	o.Warn = io.Discard
+	v, err := vault.Open(o)
 	if err != nil {
 		return nil
 	}
@@ -34,16 +49,4 @@ func entryNames() []string {
 		return nil
 	}
 	return names
-}
-
-// completionCanReadVault reports whether listing entries can be done without an
-// interactive passphrase prompt, which would corrupt shell completion. The
-// encrypted file backend prompts unless its passphrase is already available in
-// the environment.
-func completionCanReadVault() bool {
-	switch os.Getenv("SANDUK_BACKEND") {
-	case "file", "age":
-		return os.Getenv("SANDUK_FILE_PASSPHRASE") != ""
-	}
-	return true
 }

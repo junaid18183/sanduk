@@ -37,7 +37,9 @@ func (e *Entry) Marshal() ([]byte, error) {
 func UnmarshalEntry(b []byte) (*Entry, error) {
 	var e Entry
 	if err := json.Unmarshal(b, &e); err != nil {
-		return nil, fmt.Errorf("corrupt vault entry: %w", err)
+		// The decoder's message is not included: it can quote part of the
+		// stored bytes, which are secret.
+		return nil, fmt.Errorf("corrupt vault entry")
 	}
 	if err := e.validate(); err != nil {
 		return nil, err

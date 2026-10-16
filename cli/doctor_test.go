@@ -36,7 +36,7 @@ func TestDiffKeysEmptyTemplate(t *testing.T) {
 }
 
 func TestSortedKeysIsSorted(t *testing.T) {
-	got := sortedKeys(map[string]string{"C": "", "A": "", "B": ""})
+	got := sortedMapKeys(map[string]string{"C": "", "A": "", "B": ""})
 	want := []string{"A", "B", "C"}
 	for i := range want {
 		if got[i] != want[i] {

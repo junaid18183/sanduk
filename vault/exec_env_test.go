@@ -9,6 +9,7 @@ func TestBuildEnvScrubsSandukVars(t *testing.T) {
 	t.Setenv("SANDUK_FILE_PASSPHRASE", "[REDACTED]")
 	t.Setenv("SANDUK_KEYCHAIN_PASSPHRASE", "[REDACTED]")
 	t.Setenv("SANDUK_BACKEND", "file")
+	t.Setenv("Sanduk_Service", "mixed-case")
 	t.Setenv("KEEP_ME", "yes")
 
 	out := buildEnv(map[string]string{"INJECTED": "value"})
@@ -19,7 +20,7 @@ func TestBuildEnvScrubsSandukVars(t *testing.T) {
 		got[k] = v
 	}
 
-	for _, k := range []string{"SANDUK_FILE_PASSPHRASE", "SANDUK_KEYCHAIN_PASSPHRASE", "SANDUK_BACKEND"} {
+	for _, k := range []string{"SANDUK_FILE_PASSPHRASE", "SANDUK_KEYCHAIN_PASSPHRASE", "SANDUK_BACKEND", "Sanduk_Service"} {
 		if _, ok := got[k]; ok {
 			t.Fatalf("%s leaked into the child environment", k)
 		}

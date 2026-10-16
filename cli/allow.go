@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newAllowCmd() *cobra.Command {
+func newAllowCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "allow [dir]",
 		Short: "Approve a repository's .sanduk.toml for use by exec and export",
@@ -15,8 +15,8 @@ func newAllowCmd() *cobra.Command {
 			"directory by default). exec and export refuse to use a project file whose\n" +
 			"entry has not been approved, because a repository can otherwise name any\n" +
 			"vault entry and have its commands receive those secrets.\n\n" +
-			"Approval records a hash of the file in your user config. Editing the file\n" +
-			"revokes the approval, so re-run this after a legitimate change.",
+			"Approval records a hash of the file in trusted.toml, next to your config.\n" +
+			"Editing the file revokes the approval, so re-run this after a legitimate change.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
@@ -32,14 +32,16 @@ func newAllowCmd() *cobra.Command {
 				return fmt.Errorf("no %s found in %s or its parents", vault.ProjectFileName, dir)
 			}
 
-			hash, err := vault.ApproveProject(path)
+			hash, err := vault.ApproveProject(a.trustPath(), proj)
 			if err != nil {
 				return err
 			}
 
-			warnf("Approved %s\n", path)
-			warnf("entry %q (sha256 %s)\n", proj.Entry, hash[:12])
-			warnf("Re-run after editing the file; edits revoke the approval.\n")
+			// Show what is being approved, so the decision is made on the same
+			// bytes whose hash is stored.
+			a.warnf("Approved %s\n", path)
+			a.warnf("entry %q (sha256 %s)\n", proj.Entry, hash[:12])
+			a.warnf("Re-run after editing the file; edits revoke the approval.\n")
 			return nil
 		},
 	}

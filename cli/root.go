@@ -1,36 +1,30 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
 )
 
-// cfgFile is bound to the persistent --config flag.
-var cfgFile string
-
-// backendFlag is bound to the persistent --backend flag.
-var backendFlag string
-
-// keychainFlag is bound to the persistent --keychain flag.
-var keychainFlag string
-
-// serviceFlag is bound to the persistent --service flag.
-var serviceFlag string
-
 // Execute builds and runs the root command.
 func Execute() error {
-	root := newRootCmd()
-	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "sanduk: "+err.Error())
+	if err := newRootCmd(newApp()).Execute(); err != nil {
+		// A bare exit status (the child of exec on Windows) has already
+		// reported itself; anything else is ours to print.
+		var exit *vault.ExitError
+		if !errors.As(err, &exit) || exit.Err != nil {
+			fmt.Fprintln(os.Stderr, "sanduk: "+err.Error())
+		}
 		return err
 	}
 	return nil
 }
 
-func newRootCmd() *cobra.Command {
+func newRootCmd(a *app) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "sanduk",
 		Short: "sanduk is a vault for API keys and secrets in development",
@@ -41,71 +35,39 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Resolve the backend settings from flag > env > config > default and
-			// hand them to the vault package, which reads them from the
-			// environment (see SANDUK_BACKEND / SANDUK_KEYCHAIN / SANDUK_SERVICE).
-			s, err := resolveSettings()
-			if err != nil {
-				// A broken config must not brick every command, including
-				// `sanduk config`, which is how you would inspect it. Remember
-				// the failure and let each command report it.
-				settingsErr = err
-				resolved = nil
-				return nil
-			}
-			resolved = s
-			settingsErr = nil
-			return exportSettings(s)
+			a.stderr = cmd.ErrOrStderr()
+			// Resolve flag > env > config > default now. A broken config is
+			// remembered rather than fatal: `sanduk config` is how you would
+			// inspect it, and the commands that need the config report it.
+			a.resolved()
+			return nil
 		},
 	}
 
-	root.PersistentFlags().StringVar(&cfgFile, "config", "",
+	root.PersistentFlags().StringVar(&a.configFlag, "config", "",
 		"config file (default $XDG_CONFIG_HOME/sanduk/config.toml)")
-	root.PersistentFlags().StringVar(&backendFlag, "backend", "",
-		"keyring backend: keychain, keychain-biometric, secret-service, wincred, kwallet, pass, file, age")
-	root.PersistentFlags().StringVar(&keychainFlag, "keychain", "",
+	root.PersistentFlags().StringVar(&a.backendFlag, "backend", "",
+		"keyring backend: "+strings.Join(vault.Backends, ", "))
+	root.PersistentFlags().StringVar(&a.keychainFlag, "keychain", "",
 		"macOS keychain to use (default \"login\"; a dedicated keychain is created on first write)")
-	root.PersistentFlags().StringVar(&serviceFlag, "service", "",
+	root.PersistentFlags().StringVar(&a.serviceFlag, "service", "",
 		"keystore service name, also the age file name (default \"sanduk\")")
 
 	root.AddCommand(
-		newAddCmd(),
-		newAddGroupCmd(),
-		newGroupCmd(),
-		newGetCmd(),
-		newRemoveCmd(),
-		newRotateCmd(),
-		newListCmd(),
-		newExecCmd(),
-		newExportCmd(),
-		newImportCmd(),
-		newAllowCmd(),
-		newDoctorCmd(),
-		newConfigCmd(),
-		newVersionCmd(),
+		newAddCmd(a),
+		newAddGroupCmd(a),
+		newGroupCmd(a),
+		newGetCmd(a),
+		newRemoveCmd(a),
+		newRotateCmd(a),
+		newListCmd(a),
+		newExecCmd(a),
+		newExportCmd(a),
+		newImportCmd(a),
+		newAllowCmd(a),
+		newDoctorCmd(a),
+		newConfigCmd(a),
+		newVersionCmd(a),
 	)
 	return root
-}
-
-// loadConfig loads the metadata config from the resolved location.
-func loadConfig() (*vault.Config, string, error) {
-	path := cfgFile
-	if path == "" {
-		path = vault.ConfigPath()
-	}
-	cfg, err := vault.LoadConfig(path)
-	if err != nil {
-		return nil, path, err
-	}
-	return cfg, path, nil
-}
-
-// updateConfig loads, mutates, and saves the metadata config.
-func updateConfig(fn func(*vault.Config)) error {
-	cfg, path, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	fn(cfg)
-	return vault.SaveConfig(path, cfg)
 }

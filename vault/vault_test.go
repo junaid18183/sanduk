@@ -10,12 +10,7 @@ import (
 // touch the developer's real keychain.
 func newFileVault(t *testing.T) *Vault {
 	t.Helper()
-	t.Setenv("SANDUK_BACKEND", "file")
-	t.Setenv("SANDUK_FILE_DIR", t.TempDir())
-	t.Setenv("SANDUK_FILE_PASSPHRASE", "[REDACTED]")
-	t.Setenv("SANDUK_SERVICE", "sanduk-test")
-
-	v, err := New()
+	v, err := Open(testOptions(t))
 	if err != nil {
 		t.Fatalf("open vault: %v", err)
 	}

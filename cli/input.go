@@ -42,7 +42,7 @@ func readSecret(fromEnv, fromFile string, confirm bool) (string, error) {
 		return v, nil
 	}
 
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	if !isTerminal(os.Stdin) {
 		b, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return "", err
