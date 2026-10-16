@@ -60,6 +60,19 @@ security hole; each such change is listed under **Breaking**.
 
 - `sanduk doctor --metadata [--fix]` reports and repairs drift between the vault
   and config.toml.
+- Releases are built only after the full CI suite passes, with `-trimpath`, and
+  without rewriting go.mod at release time. `checksums.txt` is signed with
+  keyless cosign (`checksums.txt.sigstore.json`), each archive has an SBOM, and
+  GitHub build-provenance attestations are published.
+- CI runs on Windows too, plus golangci-lint, govulncheck, a `go mod tidy`
+  check and `goreleaser check`. Actions are pinned to commit SHAs and kept
+  current by Dependabot.
+
+### Dependencies
+
+- `jose2go` 1.5.0 → 1.11.0 (GO-2023-2409; reachable only through the keyring
+  library's file backend, which sanduk never selects), `wincred` 1.2.3,
+  `pflag` 1.0.10, `x/crypto` 0.57.0.
 
 ### Breaking
 

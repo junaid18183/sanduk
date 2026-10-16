@@ -55,20 +55,17 @@ examples/               config.toml.example, plus project/ — a runnable starte
 ## Common tasks
 
 ```sh
-make build     # build ./sanduk
-make test      # go test ./...
-make vet       # go vet ./...
-make fmt       # gofmt -l -w .
+make build      # build ./sanduk
+make test       # go test ./...      (make race: with -race)
+make cover      # coverage summary
+make lint       # golangci-lint, pinned to the CI version
+make vuln       # govulncheck, pinned to the CI version
+make fmt        # gofmt -l -w .      (make fmt-check: report only)
+make check      # everything CI runs: fmt-check tidy-check vet race lint vuln cross
 ```
 
-Before pushing, run `gofmt -l .` (must be empty), `go vet ./...`, `go test ./...`,
-and a cross-compile check:
-
-```sh
-for t in linux/amd64 linux/arm64 windows/amd64; do
-  GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -o /dev/null .
-done
-```
+Before pushing, run `make check`. Lint the platform-specific files too:
+`GOOS=windows golangci-lint run ./...` and `GOOS=linux …` (CI does both).
 
 On macOS, also check the real darwin build (cgo **on**), which is what ships:
 
@@ -227,7 +224,14 @@ Break these and you break the tool's security model:
 - Values entering the keychain are validated on write **and** on read
   (`entry.validate()`), so a hand-edited backend can't produce a half-valid entry.
 - Tests set configuration through `t.Setenv`; `vault.newFileVault` opens the age
-  backend in a `t.TempDir()`.
+  backend in a `t.TempDir()`. Both packages have a `TestMain` that points every
+  `SANDUK_*` setting at a throwaway age vault before any test runs, and calls
+  `vault.UseFastScryptForTests()` (which panics outside `go test`). In `cli`,
+  drive commands through `runCmd(t, stdin, args...)` after `testEnv(t)` (see
+  `cli/cmd_test.go`); it captures stdout through `cmd.OutOrStdout()`.
+- CI pins every action to a commit SHA and every tool to a version (see the
+  `env:` block in ci.yml). When bumping one, pick a release at least two weeks
+  old; Dependabot enforces the same cooldown.
 
 ## Adding a command
 

@@ -1,8 +1,10 @@
 package vault
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -19,7 +21,7 @@ func newTestAgeKeyring(t *testing.T) (*ageKeyring, string) {
 func TestAgeKeyringLifecycle(t *testing.T) {
 	k, _ := newTestAgeKeyring(t)
 
-	if _, err := k.Get("missing"); err != keyring.ErrKeyNotFound {
+	if _, err := k.Get("missing"); !errors.Is(err, keyring.ErrKeyNotFound) {
 		t.Fatalf("Get(missing) = %v, want ErrKeyNotFound", err)
 	}
 
@@ -46,7 +48,7 @@ func TestAgeKeyringLifecycle(t *testing.T) {
 	if err := k.Remove("openai"); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if err := k.Remove("openai"); err != keyring.ErrKeyNotFound {
+	if err := k.Remove("openai"); !errors.Is(err, keyring.ErrKeyNotFound) {
 		t.Fatalf("second Remove = %v, want ErrKeyNotFound", err)
 	}
 }
@@ -108,18 +110,21 @@ func TestAgeKeyringMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMetadata: %v", err)
 	}
-	if meta.Item == nil || meta.Item.Label != "sanduk: openai" {
+	if meta.Item == nil || meta.Label != "sanduk: openai" {
 		t.Fatalf("metadata = %+v", meta)
 	}
-	if len(meta.Item.Data) != 0 {
+	if len(meta.Data) != 0 {
 		t.Fatal("metadata must not include the secret data")
 	}
-	if _, err := k.GetMetadata("missing"); err != keyring.ErrKeyNotFound {
+	if _, err := k.GetMetadata("missing"); !errors.Is(err, keyring.ErrKeyNotFound) {
 		t.Fatalf("GetMetadata(missing) = %v", err)
 	}
 }
 
 func TestAgeKeyringChmodsFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permission bits")
+	}
 	k, path := newTestAgeKeyring(t)
 	if err := k.Set(keyring.Item{Key: "a", Data: []byte("1")}); err != nil {
 		t.Fatal(err)

@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/99designs/keyring"
@@ -36,8 +37,9 @@ func TestOpenKeyringFileBackendIsAge(t *testing.T) {
 }
 
 func TestAgePathLocation(t *testing.T) {
-	t.Setenv("SANDUK_FILE_DIR", "/tmp/sanduk-path-test")
-	if got, want := agePath("sanduk"), "/tmp/sanduk-path-test/sanduk.age"; got != want {
+	dir := filepath.Join(t.TempDir(), "sanduk-path-test")
+	t.Setenv("SANDUK_FILE_DIR", dir)
+	if got, want := agePath("sanduk"), filepath.Join(dir, "sanduk.age"); got != want {
 		t.Fatalf("agePath = %q, want %q", got, want)
 	}
 }

@@ -81,15 +81,6 @@ func saveTrust(path string, t *TrustStore) error {
 	return WriteFileAtomic(path, buf.Bytes(), 0o600)
 }
 
-// HashFile returns the hex-encoded sha256 of a file's contents.
-func HashFile(path string) (string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return hashBytes(b), nil
-}
-
 func hashBytes(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])

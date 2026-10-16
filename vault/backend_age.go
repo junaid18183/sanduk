@@ -173,6 +173,9 @@ func (k *ageKeyring) save() error {
 	if err != nil {
 		return err
 	}
+	if testScryptWorkFactor > 0 {
+		recipient.SetWorkFactor(testScryptWorkFactor)
+	}
 
 	var buf bytes.Buffer
 	w, err := age.Encrypt(&buf, recipient)
