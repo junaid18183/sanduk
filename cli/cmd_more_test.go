@@ -136,7 +136,7 @@ func TestGroupSetUnsetShowGet(t *testing.T) {
 	}
 
 	out, err = runCmd(t, "", "group", "get", "warden", "STRIPE_KEY", "--force")
-	if err != nil || out != vault.Redact("sk-test-stripe")+"\n" {
+	if err != nil || out != redact("sk-test-stripe")+"\n" {
 		t.Fatalf("group get (redacted) = %q, %v", out, err)
 	}
 	out, err = runCmd(t, "", "group", "get", "warden", "STRIPE_KEY", "--force", "--reveal")
@@ -168,16 +168,25 @@ func TestGetGroupFieldAndAll(t *testing.T) {
 	testEnv(t)
 	addWarden(t)
 	out, err := runCmd(t, "", "get", "warden", "--field", "API_KEY", "--force")
-	if err != nil || out != vault.Redact("sk-test-api")+"\n" {
+	if err != nil || out != redact("sk-test-api")+"\n" {
 		t.Fatalf("get --field = %q, %v", out, err)
 	}
-	out, err = runCmd(t, "", "get", "warden", "--all", "--force")
-	if err != nil {
-		t.Fatalf("get --all: %v", err)
-	}
-	var m map[string]string
-	if err := json.Unmarshal([]byte(out), &m); err != nil || m["DB_URL"] != "postgres://test" {
-		t.Fatalf("get --all = %q (%v)", out, err)
+	// --all is redacted like everything else get prints, unless --reveal.
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"get", "warden", "--all", "--force"}, redact("postgres://test")},
+		{[]string{"get", "warden", "--all", "--force", "--reveal"}, "postgres://test"},
+	} {
+		out, err = runCmd(t, "", c.args...)
+		if err != nil {
+			t.Fatalf("%v: %v", c.args, err)
+		}
+		var m map[string]string
+		if err := json.Unmarshal([]byte(out), &m); err != nil || m["DB_URL"] != c.want {
+			t.Fatalf("%v = %q (%v), want DB_URL %q", c.args, out, err, c.want)
+		}
 	}
 	if _, err := runCmd(t, "", "get", "warden", "--force"); err == nil {
 		t.Fatal("get of a group without --field/--all succeeded")
@@ -252,16 +261,14 @@ func TestAddReplaceRules(t *testing.T) {
 func TestCompletionListsEntries(t *testing.T) {
 	testEnv(t)
 	addWarden(t)
-	resetSettings(t)
-	names, _ := completeEntryNames(nil, nil, "")
+	names, _ := newApp().completeEntryNames(nil, nil, "")
 	if len(names) != 1 || names[0] != "warden" {
 		t.Fatalf("completion = %v, want [warden]", names)
 	}
 	// With the age backend and no passphrase available, completion must not
 	// prompt (it would corrupt the shell's completion output).
 	t.Setenv("SANDUK_FILE_PASSPHRASE", "")
-	resetSettings(t)
-	if names, _ := completeSelector(nil, nil, ""); names != nil {
+	if names, _ := newApp().completeSelector(nil, nil, ""); names != nil {
 		t.Fatalf("completion read the vault without a passphrase: %v", names)
 	}
 }

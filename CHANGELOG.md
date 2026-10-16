@@ -91,6 +91,17 @@ security hole; each such change is listed under **Breaking**.
   given (it used to warn and overwrite, including whole groups).
 - `doctor` exits with status 3 (not 1) when keys are missing, so scripts can
   tell drift from failure.
+- Removed deprecated spellings with no replacement period: `add --env` (use
+  `--as`), `add-group --from-file` and `group set --from-file` (use
+  `--from-dotenv`), `import --shred` (use `--delete`), and the `biometric`
+  backend alias (use `keychain-biometric`).
+- `get` redacts everything it prints — a flat secret, `--field` and `--all` —
+  unless `--reveal` is given. It is for inspection; scripts use `export`.
+- `list` shows an entry with no metadata as `unknown` instead of guessing
+  `secret`.
+- `add`, `add-group` and `import` check for an existing entry by listing names
+  instead of reading it, so they no longer decrypt a value (or prompt for
+  Touch ID) just to refuse an overwrite.
 - `add-group --field KEY=VALUE` is refused; `--field KEY` now prompts for the
   value with echo off. `--from-json` takes a file path or `-` (stdin) instead of
   inline JSON. Values on the command line are visible in `ps`.

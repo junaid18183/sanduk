@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newGroupCmd() *cobra.Command {
+func newGroupCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "group",
 		Short: "Inspect and edit the fields of a grouped entry",
@@ -18,15 +18,14 @@ func newGroupCmd() *cobra.Command {
 			"is an environment variable name. Use add-group to create one, and these\n" +
 			"subcommands to edit it a field at a time.",
 	}
-	cmd.AddCommand(newGroupSetCmd(), newGroupUnsetCmd(), newGroupShowCmd(), newGroupGetCmd())
+	cmd.AddCommand(newGroupSetCmd(a), newGroupUnsetCmd(a), newGroupShowCmd(a), newGroupGetCmd(a))
 	return cmd
 }
 
-func newGroupSetCmd() *cobra.Command {
+func newGroupSetCmd(a *app) *cobra.Command {
 	var (
 		fromEnv    bool
 		fromDotenv string
-		fromFile   string // deprecated alias for --from-dotenv
 		descFlag   string
 	)
 
@@ -51,14 +50,13 @@ func newGroupSetCmd() *cobra.Command {
 			name := args[0]
 			keys := args[1:]
 
-			if fromDotenv == "" && fromFile != "" {
-				fromDotenv = fromFile
-			}
-			if fromDotenv != "" && fromEnv {
-				return fmt.Errorf("--from-env and --from-dotenv are mutually exclusive")
+			for _, k := range keys {
+				if err := vault.ValidateEnvName(k); err != nil {
+					return err
+				}
 			}
 
-			v, err := openVault()
+			v, err := a.openVault()
 			if err != nil {
 				return err
 			}
@@ -91,10 +89,15 @@ func newGroupSetCmd() *cobra.Command {
 				if len(keys) == 0 {
 					return fmt.Errorf("no fields given; name at least one KEY, or use --from-dotenv")
 				}
-				current := currentGroupFields(v, name)
+				// Show the redacted current value only to someone at the
+				// prompt; a piped run would put it in a log.
+				var current map[string]string
+				if isTerminal(os.Stdin) {
+					current = currentGroupFields(v, name)
+				}
 				for _, k := range keys {
 					if cur, ok := current[k]; ok {
-						warnf("%s: %s (current)\n", k, vault.Redact(cur))
+						a.warnf("%s: %s (current)\n", k, redact(cur))
 					}
 					val, err := readGroupFieldValue(k, len(keys) == 1)
 					if err != nil {
@@ -104,21 +107,15 @@ func newGroupSetCmd() *cobra.Command {
 				}
 			}
 
-			for k := range m {
-				if err := vault.ValidateEnvName(k); err != nil {
-					return err
-				}
-			}
-
 			if err := v.MergeGroup(name, m); err != nil {
 				return err
 			}
 			// Keep list accurate even if the metadata config was lost.
-			if err := recordGroupMeta(name, descFlag); err != nil {
+			if err := a.recordGroupMeta(name, descFlag); err != nil {
 				return err
 			}
 
-			warnf("Updated %d field(s) in group %q\n", len(m), name)
+			a.warnf("Updated %d field(s) in group %q\n", len(m), name)
 			return nil
 		},
 	}
@@ -126,11 +123,9 @@ func newGroupSetCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&fromEnv, "from-env", false,
 		"read each value from the environment variable of the same name")
 	cmd.Flags().StringVar(&fromDotenv, "from-dotenv", "", "merge the fields of a .env file")
-	cmd.Flags().StringVar(&fromFile, "from-file", "", "deprecated: use --from-dotenv")
 	cmd.Flags().StringVar(&descFlag, "description", "", "set the group's description")
 	cmd.MarkFlagsMutuallyExclusive("from-env", "from-dotenv")
-	_ = cmd.Flags().MarkDeprecated("from-file", "use --from-dotenv")
-	cmd.ValidArgsFunction = completeEntryNames
+	cmd.ValidArgsFunction = a.completeEntryNames
 	return cmd
 }
 
@@ -150,7 +145,7 @@ func currentGroupFields(v *vault.Vault, name string) map[string]string {
 // prompts with echo disabled and asks for confirmation, so a typo cannot be
 // stored.
 func readGroupFieldValue(key string, allowStdin bool) (string, error) {
-	if allowStdin && !vault.IsTerminal(os.Stdin) {
+	if allowStdin && !isTerminal(os.Stdin) {
 		b, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return "", err
@@ -179,7 +174,7 @@ func readGroupFieldValue(key string, allowStdin bool) (string, error) {
 	return val, nil
 }
 
-func newGroupUnsetCmd() *cobra.Command {
+func newGroupUnsetCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "unset <group> KEY [KEY...]",
 		Short: "Remove fields from a group",
@@ -190,7 +185,7 @@ func newGroupUnsetCmd() *cobra.Command {
 			// the first removal already deleted.
 			keys := dedupeStrings(args[1:])
 
-			v, err := openVault()
+			v, err := a.openVault()
 			if err != nil {
 				return err
 			}
@@ -198,15 +193,15 @@ func newGroupUnsetCmd() *cobra.Command {
 				return err
 			}
 
-			warnf("Removed %d field(s) from group %q\n", len(keys), name)
+			a.warnf("Removed %d field(s) from group %q\n", len(keys), name)
 			return nil
 		},
 	}
-	cmd.ValidArgsFunction = completeEntryNames
+	cmd.ValidArgsFunction = a.completeEntryNames
 	return cmd
 }
 
-func newGroupShowCmd() *cobra.Command {
+func newGroupShowCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show <group>",
 		Short: "List a group's field names (never its values)",
@@ -214,7 +209,7 @@ func newGroupShowCmd() *cobra.Command {
 			"--only. Values are never printed; use \"sanduk group get\" for one value.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := openVault()
+			v, err := a.openVault()
 			if err != nil {
 				return err
 			}
@@ -226,15 +221,15 @@ func newGroupShowCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), n)
 			}
 
-			warnf("%d field(s) in group %q\n", len(names), args[0])
+			a.warnf("%d field(s) in group %q\n", len(names), args[0])
 			return nil
 		},
 	}
-	cmd.ValidArgsFunction = completeEntryNames
+	cmd.ValidArgsFunction = a.completeEntryNames
 	return cmd
 }
 
-func newGroupGetCmd() *cobra.Command {
+func newGroupGetCmd(a *app) *cobra.Command {
 	var (
 		reveal bool
 		force  bool
@@ -253,7 +248,7 @@ func newGroupGetCmd() *cobra.Command {
 				return err
 			}
 
-			v, err := openVault()
+			v, err := a.openVault()
 			if err != nil {
 				return err
 			}
@@ -270,6 +265,6 @@ func newGroupGetCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&force, "force", false, "allow printing to a non-terminal")
 	cmd.Flags().BoolVar(&reveal, "reveal", false, "print the full value instead of a redacted one")
-	cmd.ValidArgsFunction = completeEntryNames
+	cmd.ValidArgsFunction = a.completeEntryNames
 	return cmd
 }

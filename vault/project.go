@@ -30,12 +30,6 @@ type Project struct {
 	hash string
 }
 
-// Path returns the absolute path the project file was loaded from.
-func (p *Project) Path() string { return p.path }
-
-// Hash returns the hex sha256 of the bytes the project file was parsed from.
-func (p *Project) Hash() string { return p.hash }
-
 // LoadProject walks up from dir and returns the nearest ProjectFileName.
 //
 // It returns ("", nil, nil) when no project file exists anywhere above dir, so

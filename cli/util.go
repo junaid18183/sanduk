@@ -9,19 +9,6 @@ import (
 	"github.com/junaid18183/sanduk/vault"
 )
 
-// warnf writes a status message to stderr so stdout stays machine-readable.
-func warnf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format, args...)
-}
-
-func errInvalidField(f string) error {
-	return fmt.Errorf("invalid --field %q, want KEY", f)
-}
-
-func errNoFields() error {
-	return fmt.Errorf("no fields provided; use --field KEY, --from-dotenv or --from-json")
-}
-
 // dedupeStrings removes duplicates, preserving first-seen order.
 func dedupeStrings(items []string) []string {
 	seen := make(map[string]bool, len(items))
@@ -46,6 +33,7 @@ func sortedMapKeys(m map[string]string) []string {
 	return out
 }
 
+// parseJSONObject decodes a JSON object whose values are all strings.
 func parseJSONObject(s string) (map[string]string, error) {
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(s), &raw); err != nil {
@@ -63,19 +51,7 @@ func parseJSONObject(s string) (map[string]string, error) {
 	return out, nil
 }
 
-// recordSecretMeta marks name as a flat secret in the metadata config and
-// clears any stale group record. This keeps list accurate without reading
-// secret values from the keychain.
-func recordSecretMeta(name, env, desc string) error {
-	return updateConfig(func(c *vault.Config) { c.RecordSecret(name, env, desc) })
-}
-
-// recordGroupMeta marks name as a group in the metadata config and clears any
-// stale secret record.
-func recordGroupMeta(name, desc string) error {
-	return updateConfig(func(c *vault.Config) { c.RecordGroup(name, desc) })
-}
-
+// readDotenvFile parses a .env file, naming the file in any error.
 func readDotenvFile(path string) (map[string]string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

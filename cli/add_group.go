@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,7 +22,7 @@ func parseFieldFlags(fields []string) ([]string, error) {
 				"pass --field %s to be prompted, or use --from-dotenv or --from-json -", k, k)
 		}
 		if f == "" {
-			return nil, errInvalidField(f)
+			return nil, fmt.Errorf("--field needs a KEY")
 		}
 		out = append(out, f)
 	}
@@ -51,12 +50,11 @@ func readJSONSource(src string) (map[string]string, error) {
 	return parseJSONObject(string(b))
 }
 
-func newAddGroupCmd() *cobra.Command {
+func newAddGroupCmd(a *app) *cobra.Command {
 	var (
 		fields     []string
 		fromJSON   string
 		fromDotenv string
-		fromFile   string // deprecated alias for --from-dotenv
 		replace    bool
 		descFlag   string
 	)
@@ -75,10 +73,6 @@ func newAddGroupCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-
-			if fromDotenv == "" && fromFile != "" {
-				fromDotenv = fromFile
-			}
 
 			m := map[string]string{}
 			fieldKeys, err := parseFieldFlags(fields)
@@ -107,36 +101,22 @@ func newAddGroupCmd() *cobra.Command {
 					m[k] = v
 				}
 			}
-			// Validate the prompted names before asking for any value.
-			for _, k := range fieldKeys {
-				if err := vault.ValidateEnvName(k); err != nil {
-					return err
-				}
-			}
-			for k := range m {
-				if err := vault.ValidateEnvName(k); err != nil {
-					return err
-				}
-			}
 			if len(m) == 0 && len(fieldKeys) == 0 {
-				return errNoFields()
+				return fmt.Errorf("no fields provided; use --field KEY, --from-dotenv or --from-json")
+			}
+			// Validate every name before prompting for any value.
+			for _, k := range append(sortedMapKeys(m), fieldKeys...) {
+				if err := vault.ValidateEnvName(k); err != nil {
+					return err
+				}
 			}
 
-			v, err := openVault()
+			v, err := a.openVault()
 			if err != nil {
 				return err
 			}
-			if existing, gerr := v.Get(name); gerr == nil {
-				if !replace {
-					if existing.Type == vault.TypeGroup {
-						return fmt.Errorf("group %q already exists with %d field(s); merge with \"sanduk group set %s\", or pass --replace to overwrite it",
-							name, len(existing.Fields), name)
-					}
-					return fmt.Errorf("%q already exists as a %s; pass --replace to overwrite it with a group",
-						name, existing.Type)
-				}
-			} else if !errors.Is(gerr, vault.ErrNotFound) {
-				return gerr
+			if err := a.refuseOverwrite(v, name, replace, "merge with \"sanduk group set "+name+"\", or "); err != nil {
+				return err
 			}
 
 			for _, k := range fieldKeys {
@@ -151,11 +131,11 @@ func newAddGroupCmd() *cobra.Command {
 				return err
 			}
 
-			if err := recordGroupMeta(name, descFlag); err != nil {
+			if err := a.recordGroupMeta(name, descFlag); err != nil {
 				return err
 			}
 
-			warnf("Added group %q with %d field(s)\n", name, len(m))
+			a.warnf("Added group %q with %d field(s)\n", name, len(m))
 			return nil
 		},
 	}
@@ -163,10 +143,8 @@ func newAddGroupCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&fields, "field", nil, "add field KEY, prompting for its value (repeatable)")
 	cmd.Flags().StringVar(&fromJSON, "from-json", "", "read a JSON object of fields from a file, or - for stdin")
 	cmd.Flags().StringVar(&fromDotenv, "from-dotenv", "", "read fields from a .env file")
-	cmd.Flags().StringVar(&fromFile, "from-file", "", "deprecated: use --from-dotenv")
 	cmd.Flags().StringVar(&descFlag, "description", "", "human-readable description")
 	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite an existing entry of any type")
 	cmd.MarkFlagsMutuallyExclusive("from-json", "from-dotenv")
-	_ = cmd.Flags().MarkDeprecated("from-file", "use --from-dotenv")
 	return cmd
 }

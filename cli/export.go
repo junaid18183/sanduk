@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newExportCmd() *cobra.Command {
+func newExportCmd(a *app) *cobra.Command {
 	var (
 		format string
 		only   []string
@@ -39,7 +39,7 @@ func newExportCmd() *cobra.Command {
 			"values only need to reach one process.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, err := resolveSelection(args, only, except)
+			env, err := a.resolveSelection(args, only, except)
 			if err != nil {
 				return err
 			}
@@ -58,9 +58,9 @@ func newExportCmd() *cobra.Command {
 					return err
 				}
 				if runtime.GOOS == "windows" {
-					warnf("wrote %d variable(s) to %s\n", len(env), output)
+					a.warnf("wrote %d variable(s) to %s\n", len(env), output)
 				} else {
-					warnf("wrote %d variable(s) to %s (mode 0600)\n", len(env), output)
+					a.warnf("wrote %d variable(s) to %s (mode 0600)\n", len(env), output)
 				}
 				return nil
 			}
@@ -77,6 +77,6 @@ func newExportCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&output, "output", "o", "",
 		"write to this file (mode 0600) instead of stdout")
 	cmd.Flags().BoolVar(&force, "force", false, "replace an existing --output file")
-	cmd.ValidArgsFunction = completeSelector
+	cmd.ValidArgsFunction = a.completeSelector
 	return cmd
 }

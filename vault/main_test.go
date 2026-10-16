@@ -2,35 +2,23 @@ package vault
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 )
 
-// TestMain points every SANDUK_* setting at a throwaway age vault before any
-// test runs. A test that forgets newFileVault therefore opens a temporary file,
-// never the developer's real keychain or config.
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "sanduk-vault-test-")
-	if err != nil {
-		panic(err)
-	}
-	isolateForTests(dir)
 	UseFastScryptForTests()
-	code := m.Run()
-	os.RemoveAll(dir)
-	os.Exit(code)
+	os.Exit(m.Run())
 }
 
-func isolateForTests(dir string) {
-	for k, v := range map[string]string{
-		"SANDUK_BACKEND":         "file",
-		"SANDUK_FILE_DIR":        filepath.Join(dir, "data"),
-		"SANDUK_FILE_PASSPHRASE": "test-passphrase",
-		"SANDUK_CONFIG":          filepath.Join(dir, "config", "config.toml"),
-		"SANDUK_SERVICE":         "sanduk-test",
-		"SANDUK_KEYCHAIN":        "",
-		"SANDUK_TRUST":           "",
-	} {
-		os.Setenv(k, v)
+// testOptions opens the age backend in a fresh temporary directory with a fake
+// passphrase. The vault package reads no environment, so this is the only way a
+// test reaches a backend: never the developer's real keychain.
+func testOptions(t *testing.T) Options {
+	t.Helper()
+	return Options{
+		Backend:  "file",
+		Service:  "sanduk-test",
+		FileDir:  t.TempDir(),
+		PassFunc: func(string) (string, error) { return "test-passphrase", nil },
 	}
 }

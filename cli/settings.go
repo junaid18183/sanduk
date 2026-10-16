@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	"github.com/junaid18183/sanduk/vault"
@@ -34,9 +34,11 @@ func resolveSetting(flagVal, envName, cfgVal, def string) (string, settingSource
 	}
 }
 
-// settings is the resolved backend configuration.
+// settings is the resolved configuration for one invocation.
 type settings struct {
-	ConfigPath   string
+	ConfigPath string
+	FileDir    string
+
 	Backend      string
 	Keychain     string
 	Service      string
@@ -46,75 +48,59 @@ type settings struct {
 }
 
 // resolveSettings resolves the backend settings from flag > env > config >
-// default. A config file that cannot be read is reported as the error, but the
+// default. A config file that cannot be read is returned as the error, but the
 // settings are still resolved from the flags and environment: a broken config
 // must not make `--backend file` silently fall back to the platform keystore.
-func resolveSettings() (*settings, error) {
-	path := cfgFile
+func (a *app) resolveSettings() (*settings, error) {
+	path := a.configFlag
 	if path == "" {
-		path = vault.ConfigPath()
+		path = defaultConfigPath()
 	}
 	cfg, cfgErr := vault.LoadConfig(path)
 	if cfgErr != nil {
 		cfg = &vault.Config{}
 	}
 
-	s := &settings{ConfigPath: path}
+	s := &settings{ConfigPath: path, FileDir: defaultFileDir()}
 	// An empty backend means "let the platform decide".
-	s.Backend, s.BackendFrom = resolveSetting(backendFlag, "SANDUK_BACKEND", cfg.Backend, "")
-	s.Keychain, s.KeychainFrom = resolveSetting(keychainFlag, "SANDUK_KEYCHAIN", cfg.Keychain, vault.DefaultKeychainName())
-	s.Service, s.ServiceFrom = resolveSetting(serviceFlag, "SANDUK_SERVICE", cfg.Service, vault.DefaultService())
+	s.Backend, s.BackendFrom = resolveSetting(a.backendFlag, "SANDUK_BACKEND", cfg.Backend, "")
+	s.Keychain, s.KeychainFrom = resolveSetting(a.keychainFlag, "SANDUK_KEYCHAIN", cfg.Keychain, vault.DefaultKeychainName())
+	s.Service, s.ServiceFrom = resolveSetting(a.serviceFlag, "SANDUK_SERVICE", cfg.Service, vault.DefaultService())
 
 	// A keychain name is only meaningful on macOS. Warn rather than silently
 	// ignore it, so a copied-over setting does not look effective.
 	if runtime.GOOS != "darwin" && s.KeychainFrom != sourceDefault {
-		warnf("sanduk: --keychain/SANDUK_KEYCHAIN is only used on macOS; ignoring %q\n", s.Keychain)
+		a.warnf("sanduk: --keychain/SANDUK_KEYCHAIN is only used on macOS; ignoring %q\n", s.Keychain)
 	}
 	return s, cfgErr
 }
 
-// options turns the resolved settings into what the vault package needs. The
-// age passphrase and the keychain-creation passphrase are secrets, so they only
-// ever come from the environment (or a prompt), never from config or flags.
-func (s *settings) options() vault.Options {
-	o := vault.OptionsFromEnv()
-	o.Backend = s.Backend
-	o.Keychain = s.Keychain
-	o.Service = s.Service
-	return o
+// defaultConfigPath is the metadata config location without --config:
+// SANDUK_CONFIG, then $XDG_CONFIG_HOME/sanduk, then ~/.config/sanduk.
+func defaultConfigPath() string {
+	if p := os.Getenv("SANDUK_CONFIG"); p != "" {
+		return p
+	}
+	return filepath.Join(baseDir("XDG_CONFIG_HOME", ".config"), "sanduk", "config.toml")
 }
 
-// resolved and settingsErr hold the settings for the running command. They are
-// resolved once, by PersistentPreRunE or on first use (shell completion does not
-// run PersistentPreRunE), and reset by newRootCmd.
-var (
-	resolved    *settings
-	settingsErr error
-)
-
-// currentSettings returns the resolved settings, resolving them on first use.
-// The result is never nil; settingsErr says whether the config was readable.
-func currentSettings() *settings {
-	if resolved == nil {
-		resolved, settingsErr = resolveSettings()
+// defaultFileDir is the age backend's directory: SANDUK_FILE_DIR, then
+// $XDG_DATA_HOME/sanduk, then ~/.local/share/sanduk.
+func defaultFileDir() string {
+	if d := os.Getenv("SANDUK_FILE_DIR"); d != "" {
+		return d
 	}
-	return resolved
+	return filepath.Join(baseDir("XDG_DATA_HOME", filepath.Join(".local", "share")), "sanduk")
 }
 
-// configPath is the metadata config in use (--config, SANDUK_CONFIG, default).
-func configPath() string { return currentSettings().ConfigPath }
-
-// trustPath is the project trust store for the config in use.
-func trustPath() string { return vault.TrustPathFor(configPath()) }
-
-// openVault opens the vault with the resolved settings. It refuses when the
-// config is unreadable: every command that opens the vault also reads or writes
-// its metadata, and failing after a backend write would leave the two out of
-// step. `sanduk config` does not open the vault, so it still works.
-func openVault() (*vault.Vault, error) {
-	s := currentSettings()
-	if settingsErr != nil {
-		return nil, fmt.Errorf("config is unreadable (inspect it with \"sanduk config\"): %w", settingsErr)
+// baseDir returns $xdgVar, or homeRel under the home directory.
+func baseDir(xdgVar, homeRel string) string {
+	if x := os.Getenv(xdgVar); x != "" {
+		return x
 	}
-	return vault.Open(s.options())
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return homeRel
+	}
+	return filepath.Join(home, homeRel)
 }

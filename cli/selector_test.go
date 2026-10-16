@@ -12,14 +12,6 @@ func writeFileString(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
-// resetSettings drops the memoised settings so the next use resolves them from
-// the environment the test has just set up.
-func resetSettings(t *testing.T) {
-	t.Helper()
-	resolved, settingsErr = nil, nil
-	t.Cleanup(func() { resolved, settingsErr = nil, nil })
-}
-
 // newTestVault opens a vault against the encrypted file backend and a temporary
 // metadata config, so tests never touch the real keychain or the real config.
 func newTestVault(t *testing.T) *vault.Vault {
@@ -29,9 +21,8 @@ func newTestVault(t *testing.T) *vault.Vault {
 	t.Setenv("SANDUK_FILE_PASSPHRASE", "test-passphrase")
 	t.Setenv("SANDUK_SERVICE", "sanduk-cli-test")
 	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
-	resetSettings(t)
 
-	v, err := openVault()
+	v, err := newApp().openVault()
 	if err != nil {
 		t.Fatalf("open vault: %v", err)
 	}
@@ -157,7 +148,7 @@ func TestResolveSelectorsMissingEntry(t *testing.T) {
 func TestDefaultEntryFailsWithoutProjectFile(t *testing.T) {
 	// A temporary directory has no .sanduk.toml in its ancestry.
 	t.Chdir(t.TempDir())
-	if _, _, err := defaultEntry(); err == nil {
+	if _, _, err := newApp().defaultEntry(); err == nil {
 		t.Fatal("expected an error when no project file exists")
 	}
 }
@@ -172,16 +163,15 @@ func TestDefaultEntryFromProjectFile(t *testing.T) {
 	// A project file must be approved before it is used; approve it as
 	// `sanduk allow` would, writing the trust store to a temporary config dir.
 	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
-	resetSettings(t)
 	_, proj, err := vault.LoadProject(dir)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if _, err := vault.ApproveProject(trustPath(), proj); err != nil {
+	if _, err := vault.ApproveProject(newApp().trustPath(), proj); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 
-	entry, only, err := defaultEntry()
+	entry, only, err := newApp().defaultEntry()
 	if err != nil {
 		t.Fatalf("defaultEntry: %v", err)
 	}
@@ -201,7 +191,7 @@ func TestDefaultEntryRequiresApproval(t *testing.T) {
 	t.Chdir(dir)
 	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 
-	if _, _, err := defaultEntry(); err == nil {
+	if _, _, err := newApp().defaultEntry(); err == nil {
 		t.Fatal("expected an unapproved project file to be refused")
 	}
 }
@@ -214,12 +204,11 @@ func TestDefaultEntryApprovalRevokedByEdit(t *testing.T) {
 	}
 	t.Chdir(dir)
 	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
-	resetSettings(t)
 	_, proj, err := vault.LoadProject(dir)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if _, err := vault.ApproveProject(trustPath(), proj); err != nil {
+	if _, err := vault.ApproveProject(newApp().trustPath(), proj); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 
@@ -227,7 +216,7 @@ func TestDefaultEntryApprovalRevokedByEdit(t *testing.T) {
 	if err := writeFileString(path, "entry = \"aws-prod\"\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := defaultEntry(); err == nil {
+	if _, _, err := newApp().defaultEntry(); err == nil {
 		t.Fatal("expected an edited project file to require re-approval")
 	}
 }

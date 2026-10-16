@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -11,11 +10,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newImportCmd() *cobra.Command {
+func newImportCmd(a *app) *cobra.Command {
 	var (
 		groupName string
 		deleteSrc bool
-		shred     bool // deprecated alias for --delete
 		dryRun    bool
 		replace   bool
 	)
@@ -30,9 +28,6 @@ func newImportCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
-			if !deleteSrc && shred {
-				deleteSrc = true
-			}
 
 			pairs, err := readDotenvFile(path)
 			if err != nil {
@@ -52,7 +47,7 @@ func newImportCmd() *cobra.Command {
 				for _, k := range keys {
 					fmt.Fprintln(cmd.OutOrStdout(), k)
 				}
-				warnf("dry run: %d key(s) would be imported from %s\n", len(keys), path)
+				a.warnf("dry run: %d key(s) would be imported from %s\n", len(keys), path)
 				return nil
 			}
 
@@ -64,30 +59,22 @@ func newImportCmd() *cobra.Command {
 				}
 			}
 
-			v, err := openVault()
+			v, err := a.openVault()
 			if err != nil {
 				return err
 			}
 
 			if groupName != "" {
-				existing, gerr := v.Get(groupName)
-				switch {
-				case gerr == nil && !replace && existing.Type == vault.TypeGroup:
-					return fmt.Errorf("group %q already exists with %d field(s); pass --replace to overwrite it",
-						groupName, len(existing.Fields))
-				case gerr == nil && !replace:
-					return fmt.Errorf("%q already exists as a %s; pass --replace to overwrite it with a group",
-						groupName, existing.Type)
-				case gerr != nil && !errors.Is(gerr, vault.ErrNotFound):
-					return gerr
+				if err := a.refuseOverwrite(v, groupName, replace, ""); err != nil {
+					return err
 				}
 				if err := v.AddGroup(groupName, pairs); err != nil {
 					return err
 				}
-				if err := recordGroupMeta(groupName, ""); err != nil {
+				if err := a.recordGroupMeta(groupName, ""); err != nil {
 					return err
 				}
-				warnf("Imported %d field(s) into group %q\n", len(pairs), groupName)
+				a.warnf("Imported %d field(s) into group %q\n", len(pairs), groupName)
 			} else {
 				// Like add-group, never overwrite silently: check every name
 				// before writing any, so a refusal leaves nothing half done.
@@ -100,28 +87,28 @@ func newImportCmd() *cobra.Command {
 						return fmt.Errorf("%d entry/entries already exist: %s; pass --replace to overwrite them",
 							len(overwrite), strings.Join(overwrite, ", "))
 					}
-					warnf("overwriting %d existing entry/entries: %v\n", len(overwrite), overwrite)
+					a.warnf("overwriting %d existing entry/entries: %v\n", len(overwrite), overwrite)
 				}
 				for _, k := range keys {
 					if err := v.AddSecret(k, pairs[k]); err != nil {
 						return err
 					}
 				}
-				if err := updateConfig(func(c *vault.Config) {
+				if err := a.updateConfig(func(c *vault.Config) {
 					for _, k := range keys {
 						c.RecordSecret(k, k, "")
 					}
 				}); err != nil {
 					return err
 				}
-				warnf("Imported %d secret(s)\n", len(pairs))
+				a.warnf("Imported %d secret(s)\n", len(pairs))
 			}
 
 			if deleteSrc {
 				if err := os.Remove(path); err != nil {
 					return fmt.Errorf("import succeeded but could not remove %s: %w", path, err)
 				}
-				warnf("Removed %s\n", path)
+				a.warnf("Removed %s\n", path)
 			}
 			return nil
 		},
@@ -129,10 +116,8 @@ func newImportCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&groupName, "group", "", "store all pairs as a single group with this name")
 	cmd.Flags().BoolVar(&deleteSrc, "delete", false, "delete the source file after a successful import")
-	cmd.Flags().BoolVar(&shred, "shred", false, "deprecated: use --delete")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be imported without writing")
 	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite existing entries")
-	_ = cmd.Flags().MarkDeprecated("shred", "use --delete")
 	return cmd
 }
 

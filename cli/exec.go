@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newExecCmd() *cobra.Command {
+func newExecCmd(a *app) *cobra.Command {
 	var (
 		only   []string
 		except []string
@@ -42,7 +42,7 @@ func newExecCmd() *cobra.Command {
 			}
 
 			// No selector means "the repository's default entry".
-			env, err := resolveSelection(sels, only, except)
+			env, err := a.resolveSelection(sels, only, except)
 			if err != nil {
 				return err
 			}
@@ -51,7 +51,7 @@ func newExecCmd() *cobra.Command {
 				for _, k := range sortedMapKeys(env) {
 					fmt.Fprintln(cmd.OutOrStdout(), k)
 				}
-				warnf("%d variable(s) would be injected; nothing was run\n", len(env))
+				a.warnf("%d variable(s) would be injected; nothing was run\n", len(env))
 				return nil
 			}
 
@@ -72,7 +72,7 @@ func newExecCmd() *cobra.Command {
 		"exclude these keys (comma-separated, repeatable)")
 	cmd.Flags().BoolVar(&list, "list", false,
 		"print the variable names that would be injected, without running anything")
-	cmd.ValidArgsFunction = completeSelector
+	cmd.ValidArgsFunction = a.completeSelector
 	return cmd
 }
 

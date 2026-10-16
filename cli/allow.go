@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newAllowCmd() *cobra.Command {
+func newAllowCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "allow [dir]",
 		Short: "Approve a repository's .sanduk.toml for use by exec and export",
@@ -32,16 +32,16 @@ func newAllowCmd() *cobra.Command {
 				return fmt.Errorf("no %s found in %s or its parents", vault.ProjectFileName, dir)
 			}
 
-			hash, err := vault.ApproveProject(trustPath(), proj)
+			hash, err := vault.ApproveProject(a.trustPath(), proj)
 			if err != nil {
 				return err
 			}
 
 			// Show what is being approved, so the decision is made on the same
 			// bytes whose hash is stored.
-			warnf("Approved %s\n", path)
-			warnf("entry %q (sha256 %s)\n", proj.Entry, hash[:12])
-			warnf("Re-run after editing the file; edits revoke the approval.\n")
+			a.warnf("Approved %s\n", path)
+			a.warnf("entry %q (sha256 %s)\n", proj.Entry, hash[:12])
+			a.warnf("Re-run after editing the file; edits revoke the approval.\n")
 			return nil
 		},
 	}

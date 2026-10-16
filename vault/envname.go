@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// ValidEnvName reports whether name is a portable environment variable name: a
+// validEnvName reports whether name is a portable environment variable name: a
 // letter or underscore followed by letters, digits or underscores.
-func ValidEnvName(name string) bool {
+func validEnvName(name string) bool {
 	if name == "" {
 		return false
 	}
@@ -77,7 +77,7 @@ var sensitiveEnvPrefixes = []string{"LD_", "DYLD_", "GIT_CONFIG_", sandukEnvPref
 // config nor an entry written by an older sanduk can smuggle a loader-affecting
 // or shell-breaking name through.
 func ValidateEnvName(name string) error {
-	if !ValidEnvName(name) {
+	if !validEnvName(name) {
 		return fmt.Errorf("invalid environment variable name %q (want [A-Za-z_][A-Za-z0-9_]*)", name)
 	}
 	u := strings.ToUpper(name)

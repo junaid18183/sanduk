@@ -33,7 +33,7 @@ func ParseDotenv(b []byte) (map[string]string, error) {
 		if key == "" {
 			return nil, fmt.Errorf("line %d: empty key", i+1)
 		}
-		if !ValidEnvName(key) {
+		if !validEnvName(key) {
 			// Keys become environment variable names, which export prints
 			// unquoted, so anything but a plain identifier is rejected here.
 			return nil, fmt.Errorf("line %d: invalid key %q (want [A-Za-z_][A-Za-z0-9_]*)", i+1, key)

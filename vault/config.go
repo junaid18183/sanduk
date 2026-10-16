@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -35,25 +35,6 @@ type SecretMeta struct {
 // variable names, so no explicit mapping is required.
 type GroupMeta struct {
 	Description string `toml:"description,omitempty"`
-}
-
-// ConfigPath resolves the config file location:
-//
-//	SANDUK_CONFIG            -> explicit override
-//	$XDG_CONFIG_HOME/sanduk  -> XDG base dir
-//	~/.config/sanduk         -> default
-func ConfigPath() string {
-	if p := os.Getenv("SANDUK_CONFIG"); p != "" {
-		return p
-	}
-	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
-		return filepath.Join(x, "sanduk", "config.toml")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return filepath.Join(".config", "sanduk", "config.toml")
-	}
-	return filepath.Join(home, ".config", "sanduk", "config.toml")
 }
 
 // LoadConfig reads the config file, returning an empty config if it does not
@@ -150,7 +131,7 @@ func (c *Config) EnvNameForSecret(name string) string {
 			return m.Env
 		}
 	}
-	return upper(name)
+	return strings.ToUpper(name)
 }
 
 // MetadataDrift compares the entry names a backend holds with the config's

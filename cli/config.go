@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newConfigCmd() *cobra.Command {
+func newConfigCmd(a *app) *cobra.Command {
 	var (
 		pathOnly bool
 		edit     bool
@@ -23,7 +23,7 @@ func newConfigCmd() *cobra.Command {
 			"descriptions.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path := configPath()
+			path := a.configPath()
 
 			if edit {
 				editor := os.Getenv("EDITOR")
@@ -42,20 +42,20 @@ func newConfigCmd() *cobra.Command {
 
 			// The header goes to stderr, so stdout stays exactly the file and
 			// `sanduk config > copy.toml` remains useful.
-			warnf("# %-8s %s\n", "path:", path)
-			s := currentSettings()
-			if settingsErr != nil {
-				warnf("# %-8s unreadable: %v\n", "config:", settingsErr)
+			a.warnf("# %-8s %s\n", "path:", path)
+			s := a.resolved()
+			if a.settingsErr != nil {
+				a.warnf("# %-8s unreadable: %v\n", "config:", a.settingsErr)
 			}
-			warnf("# %-8s %s (from %s)\n", "backend:", orDefault(s.Backend, "platform default"), s.BackendFrom)
-			warnf("# %-8s %s (from %s)\n", "keychain:", s.Keychain, s.KeychainFrom)
-			warnf("# %-8s %s (from %s)\n", "service:", s.Service, s.ServiceFrom)
-			warnf("# %s\n", "flags beat environment variables, which beat this file")
+			a.warnf("# %-8s %s (from %s)\n", "backend:", orDefault(s.Backend, "platform default"), s.BackendFrom)
+			a.warnf("# %-8s %s (from %s)\n", "keychain:", s.Keychain, s.KeychainFrom)
+			a.warnf("# %-8s %s (from %s)\n", "service:", s.Service, s.ServiceFrom)
+			a.warnf("# %s\n", "flags beat environment variables, which beat this file")
 
 			b, err := os.ReadFile(path)
 			if err != nil {
 				if os.IsNotExist(err) {
-					warnf("# (not created yet)\n")
+					a.warnf("# (not created yet)\n")
 					return nil
 				}
 				return err

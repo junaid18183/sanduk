@@ -23,30 +23,32 @@ func TestNativeBackendsExcludesFileBackend(t *testing.T) {
 }
 
 func TestOpenKeyringFileBackendIsAge(t *testing.T) {
-	t.Setenv("SANDUK_BACKEND", "file")
-	t.Setenv("SANDUK_FILE_DIR", t.TempDir())
-	t.Setenv("SANDUK_FILE_PASSPHRASE", "test-passphrase")
-
-	kr, err := OpenKeyring()
+	o := testOptions(t)
+	kr, err := openKeyring(o)
 	if err != nil {
-		t.Fatalf("OpenKeyring: %v", err)
+		t.Fatalf("openKeyring: %v", err)
 	}
-	if _, ok := kr.(*ageKeyring); !ok {
+	ak, ok := kr.(*ageKeyring)
+	if !ok {
 		t.Fatalf("file backend is %T, want *ageKeyring", kr)
+	}
+	if want := filepath.Join(o.FileDir, o.Service+".age"); ak.path != want {
+		t.Fatalf("age path = %q, want %q", ak.path, want)
 	}
 }
 
-func TestAgePathLocation(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "sanduk-path-test")
-	t.Setenv("SANDUK_FILE_DIR", dir)
-	if got, want := agePath("sanduk"), filepath.Join(dir, "sanduk.age"); got != want {
-		t.Fatalf("agePath = %q, want %q", got, want)
+func TestAgeBackendNeedsFileDir(t *testing.T) {
+	o := testOptions(t)
+	o.FileDir = ""
+	if _, err := openKeyring(o); err == nil {
+		t.Fatal("opened the age backend with no file directory")
 	}
 }
 
 func TestUnknownBackendIsRejected(t *testing.T) {
-	t.Setenv("SANDUK_BACKEND", "definitely-not-a-backend")
-	if _, err := OpenKeyring(); err == nil {
+	o := testOptions(t)
+	o.Backend = "definitely-not-a-backend"
+	if _, err := openKeyring(o); err == nil {
 		t.Fatal("expected an error for an unknown backend")
 	}
 }

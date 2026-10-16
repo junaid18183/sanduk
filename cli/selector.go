@@ -39,18 +39,18 @@ func parseSelectors(args []string) []selector {
 // back to the approved project file when no selector is given, resolve the
 // selectors left to right, then apply --only and --except. The project file's
 // `only` applies only when --only was not given.
-func resolveSelection(sels, only, except []string) (map[string]string, error) {
-	v, err := openVault()
+func (a *app) resolveSelection(sels, only, except []string) (map[string]string, error) {
+	v, err := a.openVault()
 	if err != nil {
 		return nil, err
 	}
-	cfg, _, err := loadConfig()
+	cfg, err := a.loadConfig()
 	if err != nil {
 		return nil, err
 	}
 
 	if len(sels) == 0 {
-		entry, projOnly, err := defaultEntry()
+		entry, projOnly, err := a.defaultEntry()
 		if err != nil {
 			return nil, err
 		}

@@ -18,7 +18,7 @@ const defaultTemplateName = ".env.example"
 // exitDrift is doctor's exit status when the group is missing template keys.
 const exitDrift = 3
 
-func newDoctorCmd() *cobra.Command {
+func newDoctorCmd(a *app) *cobra.Command {
 	var (
 		template string
 		metadata bool
@@ -44,7 +44,7 @@ func newDoctorCmd() *cobra.Command {
 				if len(args) > 0 {
 					return fmt.Errorf("--metadata checks the whole vault; it takes no entry")
 				}
-				return doctorMetadata(cmd, fix)
+				return a.doctorMetadata(cmd, fix)
 			}
 			if fix {
 				return fmt.Errorf("--fix applies to --metadata")
@@ -54,7 +54,7 @@ func newDoctorCmd() *cobra.Command {
 				entry = args[0]
 			}
 
-			projPath, proj, err := loadProject()
+			projPath, proj, err := vault.LoadProject(".")
 			if err != nil {
 				return err
 			}
@@ -65,7 +65,7 @@ func newDoctorCmd() *cobra.Command {
 				}
 				// The same approval exec and export require: an unapproved
 				// repository must not choose which entry sanduk reads.
-				if err := requireTrustedProject(projPath, proj); err != nil {
+				if err := a.requireTrustedProject(projPath, proj); err != nil {
 					return err
 				}
 				entry = proj.Entry
@@ -91,7 +91,7 @@ func newDoctorCmd() *cobra.Command {
 				return fmt.Errorf("%s: %w", tmplPath, err)
 			}
 
-			v, err := openVault()
+			v, err := a.openVault()
 			if err != nil {
 				return err
 			}
@@ -125,16 +125,16 @@ func newDoctorCmd() *cobra.Command {
 				return err
 			}
 
-			warnf("%s: %d/%d template key(s) present", entry, len(tmpl)-len(missing), len(tmpl))
+			a.warnf("%s: %d/%d template key(s) present", entry, len(tmpl)-len(missing), len(tmpl))
 			if len(extra) > 0 {
-				warnf("; %d not in the template: %s", len(extra), strings.Join(extra, ", "))
+				a.warnf("; %d not in the template: %s", len(extra), strings.Join(extra, ", "))
 			}
-			warnf("\n")
+			a.warnf("\n")
 
 			// Metadata drift is why list can report a group as a secret.
-			if cfg, _, cerr := loadConfig(); cerr == nil {
+			if cfg, cerr := a.loadConfig(); cerr == nil {
 				if _, ok := cfg.Groups[entry]; !ok {
-					warnf("warning: %s has no group metadata; \"sanduk list\" reports it as a secret (fix: sanduk doctor --metadata --fix)\n", entry)
+					a.warnf("warning: %s has no group metadata (fix: sanduk doctor --metadata --fix)\n", entry)
 				}
 			}
 
@@ -152,7 +152,7 @@ func newDoctorCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&fix, "fix", false, "with --metadata, repair the drift it finds")
 	cmd.Flags().StringVar(&template, "template", "",
 		"template file to compare against (default "+defaultTemplateName+")")
-	cmd.ValidArgsFunction = completeEntryNames
+	cmd.ValidArgsFunction = a.completeEntryNames
 	return cmd
 }
 
@@ -177,8 +177,8 @@ func diffKeys(present, template map[string]string) (missing, extra []string) {
 // doctorMetadata reports (and with fix, repairs) drift between the backend and
 // the metadata config. Only names are listed; values are read only by --fix,
 // to learn an untracked entry's type.
-func doctorMetadata(cmd *cobra.Command, fix bool) error {
-	v, err := openVault()
+func (a *app) doctorMetadata(cmd *cobra.Command, fix bool) error {
+	v, err := a.openVault()
 	if err != nil {
 		return err
 	}
@@ -186,7 +186,7 @@ func doctorMetadata(cmd *cobra.Command, fix bool) error {
 	if err != nil {
 		return err
 	}
-	cfg, _, err := loadConfig()
+	cfg, err := a.loadConfig()
 	if err != nil {
 		return err
 	}
@@ -204,7 +204,7 @@ func doctorMetadata(cmd *cobra.Command, fix bool) error {
 		return err
 	}
 	if len(untracked)+len(orphaned) == 0 {
-		warnf("metadata matches the vault (%d entries)\n", len(keys))
+		a.warnf("metadata matches the vault (%d entries)\n", len(keys))
 		return nil
 	}
 	if !fix {
@@ -221,7 +221,7 @@ func doctorMetadata(cmd *cobra.Command, fix bool) error {
 		}
 		types[n] = e.Type
 	}
-	if err := updateConfig(func(c *vault.Config) {
+	if err := a.updateConfig(func(c *vault.Config) {
 		for _, n := range orphaned {
 			c.Forget(n)
 		}
@@ -235,6 +235,6 @@ func doctorMetadata(cmd *cobra.Command, fix bool) error {
 	}); err != nil {
 		return err
 	}
-	warnf("fixed: recorded %d entry/entries, removed %d stale record(s)\n", len(untracked), len(orphaned))
+	a.warnf("fixed: recorded %d entry/entries, removed %d stale record(s)\n", len(untracked), len(orphaned))
 	return nil
 }

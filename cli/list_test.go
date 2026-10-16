@@ -38,9 +38,10 @@ func TestDescribeUsesMetadataOnly(t *testing.T) {
 		t.Fatalf("untitled = (%q, %q)", typ, info)
 	}
 
-	// An entry with no metadata defaults to a secret named after itself.
+	// An entry with no metadata is not guessed at: its type is unknown until
+	// doctor --metadata --fix records it.
 	typ, info = describe(cfg, "deepseek")
-	if typ != "secret" || info != "DEEPSEEK" {
+	if typ != "unknown" || !strings.Contains(info, "doctor --metadata") {
 		t.Fatalf("deepseek = (%q, %q)", typ, info)
 	}
 }

@@ -19,10 +19,10 @@ func TestProjectTrustLifecycle(t *testing.T) {
 	proj := filepath.Join(dir, ProjectFileName)
 	writeTestFile(t, proj, "entry = \"warden\"\n")
 	// Keep the trust store out of the developer's real config directory.
-	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	tp := filepath.Join(t.TempDir(), TrustFileName)
 
 	p := loadTestProject(t, dir)
-	ok, err := IsProjectTrusted(TrustPath(), p)
+	ok, err := IsProjectTrusted(tp, p)
 	if err != nil {
 		t.Fatalf("IsProjectTrusted: %v", err)
 	}
@@ -30,17 +30,17 @@ func TestProjectTrustLifecycle(t *testing.T) {
 		t.Fatal("an unapproved file must not be trusted")
 	}
 
-	if _, err := ApproveProject(TrustPath(), p); err != nil {
+	if _, err := ApproveProject(tp, p); err != nil {
 		t.Fatalf("ApproveProject: %v", err)
 	}
-	ok, err = IsProjectTrusted(TrustPath(), loadTestProject(t, dir))
+	ok, err = IsProjectTrusted(tp, loadTestProject(t, dir))
 	if err != nil || !ok {
 		t.Fatalf("approved file should be trusted (ok=%v err=%v)", ok, err)
 	}
 
 	// Editing the file must revoke the approval.
 	writeTestFile(t, proj, "entry = \"aws-prod\"\n")
-	ok, err = IsProjectTrusted(TrustPath(), loadTestProject(t, dir))
+	ok, err = IsProjectTrusted(tp, loadTestProject(t, dir))
 	if err != nil {
 		t.Fatalf("IsProjectTrusted: %v", err)
 	}
@@ -48,12 +48,12 @@ func TestProjectTrustLifecycle(t *testing.T) {
 		t.Fatal("editing the project file must revoke approval")
 	}
 
-	paths, err := TrustedPaths(TrustPath())
+	store, err := loadTrust(tp)
 	if err != nil {
-		t.Fatalf("TrustedPaths: %v", err)
+		t.Fatalf("loadTrust: %v", err)
 	}
-	if len(paths) != 1 || paths[0] != p.Path() {
-		t.Fatalf("TrustedPaths = %v, want [%s]", paths, p.Path())
+	if len(store.Files) != 1 || store.Files[p.path] == "" {
+		t.Fatalf("trust store = %v, want one record for %s", store.Files, p.path)
 	}
 }
 
@@ -63,10 +63,10 @@ func TestProjectTrustLifecycle(t *testing.T) {
 func TestProjectTrustUsesParsedBytes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ProjectFileName)
-	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	tp := filepath.Join(t.TempDir(), TrustFileName)
 
 	writeTestFile(t, path, "entry = \"warden\"\n")
-	if _, err := ApproveProject(TrustPath(), loadTestProject(t, dir)); err != nil {
+	if _, err := ApproveProject(tp, loadTestProject(t, dir)); err != nil {
 		t.Fatalf("ApproveProject: %v", err)
 	}
 
@@ -74,7 +74,7 @@ func TestProjectTrustUsesParsedBytes(t *testing.T) {
 	evil := loadTestProject(t, dir)
 	writeTestFile(t, path, "entry = \"warden\"\n") // swap back before the check
 
-	ok, err := IsProjectTrusted(TrustPath(), evil)
+	ok, err := IsProjectTrusted(tp, evil)
 	if err != nil {
 		t.Fatalf("IsProjectTrusted: %v", err)
 	}
@@ -86,13 +86,13 @@ func TestProjectTrustUsesParsedBytes(t *testing.T) {
 func TestTrustStoreInsideProjectIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, ProjectFileName), "entry = \"aws-prod\"\n")
-	t.Setenv("SANDUK_TRUST", filepath.Join(dir, ".trusted.toml"))
+	tp := filepath.Join(dir, ".trusted.toml")
 
 	p := loadTestProject(t, dir)
-	if _, err := ApproveProject(TrustPath(), p); err == nil {
+	if _, err := ApproveProject(tp, p); err == nil {
 		t.Fatal("approved into a trust store inside the project")
 	}
-	if _, err := IsProjectTrusted(TrustPath(), p); err == nil {
+	if _, err := IsProjectTrusted(tp, p); err == nil {
 		t.Fatal("consulted a trust store inside the project")
 	}
 }

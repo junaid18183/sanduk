@@ -1,15 +1,13 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
-	"os"
 
 	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
 )
 
-func newAddCmd() *cobra.Command {
+func newAddCmd(a *app) *cobra.Command {
 	var (
 		fromEnv     string
 		fromFile    string
@@ -35,12 +33,12 @@ func newAddCmd() *cobra.Command {
 			// Check the name the secret will actually be exposed as: --as, an
 			// existing mapping, or the upper-cased entry name. Without this,
 			// `sanduk add ld_preload` would become LD_PRELOAD in every child.
+			cfg, err := a.loadConfig()
+			if err != nil {
+				return err
+			}
 			exposed := envName
 			if exposed == "" {
-				cfg, _, err := loadConfig()
-				if err != nil {
-					return err
-				}
 				exposed = cfg.EnvNameForSecret(name)
 			}
 			if err := vault.ValidateEnvName(exposed); err != nil {
@@ -50,17 +48,17 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 
-			v, err := openVault()
+			v, err := a.openVault()
 			if err != nil {
 				return err
 			}
-			if existing, gerr := v.Get(name); gerr == nil {
-				if existing.Type != vault.TypeSecret && !replace {
-					return fmt.Errorf("%q is a %s; pass --replace to overwrite it with a flat secret",
-						name, existing.Type)
+			// Updating a flat secret in place is what add is for; anything else
+			// already stored under the name (a group, or an entry with no
+			// metadata) would be destroyed, so that needs --replace.
+			if _, isSecret := cfg.Secrets[name]; !isSecret {
+				if err := a.refuseOverwrite(v, name, replace, ""); err != nil {
+					return err
 				}
-			} else if !errors.Is(gerr, vault.ErrNotFound) {
-				return gerr
 			}
 
 			value, err := readSecret(fromEnv, fromFile, true)
@@ -71,11 +69,11 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 
-			if err := recordSecretMeta(name, envName, description); err != nil {
+			if err := a.recordSecretMeta(name, envName, description); err != nil {
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "Added secret %q\n", name)
+			a.warnf("Added secret %q\n", name)
 			return nil
 		},
 	}
@@ -83,10 +81,8 @@ func newAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&fromEnv, "from-env", "", "read the value from this environment variable")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "read the value from this file")
 	cmd.Flags().StringVar(&envName, "as", "", "environment variable to expose the secret as")
-	cmd.Flags().StringVar(&envName, "env", "", "deprecated: use --as")
 	cmd.Flags().StringVar(&description, "description", "", "human-readable description")
-	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite an entry of a different type (e.g. a group)")
+	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite an existing entry that is not a flat secret (e.g. a group)")
 	cmd.MarkFlagsMutuallyExclusive("from-env", "from-file")
-	_ = cmd.Flags().MarkDeprecated("env", "use --as")
 	return cmd
 }

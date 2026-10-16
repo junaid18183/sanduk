@@ -24,13 +24,18 @@ func testEnv(t *testing.T) string {
 	t.Setenv("SANDUK_TRUST", "")
 	cfg := filepath.Join(t.TempDir(), "config.toml")
 	t.Setenv("SANDUK_CONFIG", cfg)
-	resetSettings(t)
 	return cfg
 }
 
-// runCmd runs sanduk with args through a fresh root command and returns what
-// it wrote to stdout. stdin, when non-empty, replaces os.Stdin for the run.
+// runCmd runs sanduk with args as a fresh invocation and returns what it wrote
+// to stdout. stdin, when non-empty, replaces os.Stdin for the run.
 func runCmd(t *testing.T, stdin string, args ...string) (string, error) {
+	t.Helper()
+	return runApp(t, newApp(), stdin, args...)
+}
+
+// runApp is runCmd with a caller-supplied app, for tests that inspect it.
+func runApp(t *testing.T, a *app, stdin string, args ...string) (string, error) {
 	t.Helper()
 	if stdin != "" {
 		r, w, err := os.Pipe()
@@ -45,10 +50,7 @@ func runCmd(t *testing.T, stdin string, args ...string) (string, error) {
 		os.Stdin = r
 		t.Cleanup(func() { os.Stdin = old; r.Close() })
 	}
-	// Reset the flag variables a previous run may have set.
-	cfgFile, backendFlag, keychainFlag, serviceFlag = "", "", "", ""
-
-	root := newRootCmd()
+	root := newRootCmd(a)
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&bytes.Buffer{})
@@ -67,11 +69,12 @@ func TestBrokenConfigStillHonoursBackendFlagAndRefusesWrites(t *testing.T) {
 	// A broken config used to skip resolving the settings, so --backend was
 	// dropped and the write went to the platform keystore. Now the flag is
 	// honoured and the write is refused before it reaches any backend.
-	if _, err := runCmd(t, "sk-test-value", "--backend", "file", "add", "openai"); err == nil {
+	a := newApp()
+	if _, err := runApp(t, a, "sk-test-value", "--backend", "file", "add", "openai"); err == nil {
 		t.Fatal("add succeeded with an unreadable config")
 	}
-	if resolved == nil || resolved.Backend != "file" || resolved.BackendFrom != sourceFlag {
-		t.Fatalf("settings = %+v, want backend file from flag", resolved)
+	if s := a.settings; s == nil || s.Backend != "file" || s.BackendFrom != sourceFlag {
+		t.Fatalf("settings = %+v, want backend file from flag", s)
 	}
 
 	// `sanduk config` must still work, to inspect the broken file.
@@ -86,11 +89,10 @@ func TestBrokenConfigStillHonoursBackendFlagAndRefusesWrites(t *testing.T) {
 
 func TestConfigFlagMovesTrustStore(t *testing.T) {
 	testEnv(t)
-	cfgFile = filepath.Join(t.TempDir(), "elsewhere", "config.toml")
-	t.Cleanup(func() { cfgFile = "" })
-	resetSettings(t)
+	a := newApp()
+	a.configFlag = filepath.Join(t.TempDir(), "elsewhere", "config.toml")
 
-	if got, want := trustPath(), filepath.Join(filepath.Dir(cfgFile), vault.TrustFileName); got != want {
+	if got, want := a.trustPath(), filepath.Join(filepath.Dir(a.configFlag), vault.TrustFileName); got != want {
 		t.Fatalf("trustPath = %q, want %q (next to --config)", got, want)
 	}
 }
@@ -115,7 +117,7 @@ func TestFlatImportRefusesOverwrite(t *testing.T) {
 		t.Fatalf("import --replace: %v", err)
 	}
 
-	v, err := openVault()
+	v, err := newApp().openVault()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,8 +186,12 @@ func TestGetRefusesNonTerminal(t *testing.T) {
 		t.Fatalf("get printed to a non-terminal: %q", out)
 	}
 	out, err := runCmd(t, "", "get", "openai", "--force")
+	if err != nil || out != redact("sk-test-value")+"\n" {
+		t.Fatalf("get --force = %q, %v (want redacted)", out, err)
+	}
+	out, err = runCmd(t, "", "get", "openai", "--force", "--reveal")
 	if err != nil || out != "sk-test-value\n" {
-		t.Fatalf("get --force = %q, %v", out, err)
+		t.Fatalf("get --force --reveal = %q, %v", out, err)
 	}
 }
 

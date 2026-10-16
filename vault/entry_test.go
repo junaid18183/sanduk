@@ -59,19 +59,6 @@ func TestUnmarshalEntryCorrupt(t *testing.T) {
 	}
 }
 
-func TestRedactNeverRevealsSecret(t *testing.T) {
-	got := Redact("sk-abcdefgh1234")
-	if got == "sk-abcdefgh1234" {
-		t.Fatal("redact returned the raw secret")
-	}
-	if want := "****1234"; got != want {
-		t.Fatalf("Redact = %q, want %q", got, want)
-	}
-	if short := Redact("ab"); short != "**" {
-		t.Fatalf("Redact short = %q, want **", short)
-	}
-}
-
 func TestErrNotFoundIs(t *testing.T) {
 	if !errors.Is(ErrNotFound, ErrNotFound) {
 		t.Fatal("sentinel should match itself")

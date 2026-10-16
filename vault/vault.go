@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/99designs/keyring"
 )
@@ -15,12 +14,6 @@ var ErrNotFound = errors.New("entry not found")
 // Vault is the high-level interface to the credential store.
 type Vault struct {
 	kr keyring.Keyring
-}
-
-// New opens the vault configured by the SANDUK_* environment variables. The CLI
-// uses Open with explicitly resolved Options.
-func New() (*Vault, error) {
-	return Open(OptionsFromEnv())
 }
 
 // ValidateEntryName rejects names that cannot safely address one entry. An empty
@@ -177,6 +170,25 @@ func (v *Vault) Remove(name string) error {
 	return nil
 }
 
+// Exists reports whether an entry named name is stored. It lists names rather
+// than reading the entry, so it never decrypts a value or triggers a
+// user-presence prompt (not every backend supports metadata-only reads).
+func (v *Vault) Exists(name string) (bool, error) {
+	if err := ValidateEntryName(name); err != nil {
+		return false, err
+	}
+	names, err := v.kr.Keys()
+	if err != nil {
+		return false, err
+	}
+	for _, n := range names {
+		if n == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // List returns all entry names, sorted.
 func (v *Vault) List() ([]string, error) {
 	keys, err := v.kr.Keys()
@@ -209,8 +221,4 @@ func (v *Vault) ResolveEnv(name string, cfg *Config) (map[string]string, error) 
 	default:
 		return nil, fmt.Errorf("unknown entry type %q", e.Type)
 	}
-}
-
-func upper(s string) string {
-	return strings.ToUpper(s)
 }

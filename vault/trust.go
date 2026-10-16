@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -15,20 +14,6 @@ import (
 
 // TrustFileName is the per-user record of approved project files.
 const TrustFileName = "trusted.toml"
-
-// TrustPath resolves the project trust store from the environment. See
-// TrustPathFor.
-func TrustPath() string { return TrustPathFor(ConfigPath()) }
-
-// TrustPathFor resolves the trust store for a given metadata config path:
-// SANDUK_TRUST when set, otherwise trusted.toml next to the config, so it
-// inherits the same directory permissions and moves with --config.
-func TrustPathFor(configPath string) string {
-	if p := os.Getenv("SANDUK_TRUST"); p != "" {
-		return p
-	}
-	return filepath.Join(filepath.Dir(configPath), TrustFileName)
-}
 
 // TrustStore records a content hash per approved .sanduk.toml path. A project
 // file is trusted only while its bytes match the approved hash, so editing it
@@ -128,18 +113,4 @@ func ApproveProject(tp string, p *Project) (string, error) {
 		return "", err
 	}
 	return p.hash, nil
-}
-
-// TrustedPaths returns the approved project-file paths, sorted.
-func TrustedPaths(tp string) ([]string, error) {
-	t, err := loadTrust(tp)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(t.Files))
-	for p := range t.Files {
-		out = append(out, p)
-	}
-	sort.Strings(out)
-	return out, nil
 }

@@ -170,11 +170,11 @@ command can read them; prefer `exec`, which confines them to one process.
 | `sanduk group set <name> [KEY…]` | Merge fields into a group (prompt, stdin, `--from-env` reads each KEY from `$KEY`, `--from-dotenv F`, `--description`). |
 | `sanduk group unset <name> KEY…` | Remove fields from a group. |
 | `sanduk group show <name>` | List a group's field names (never values). |
-| `sanduk group get <name> KEY` | Print one field (redacted unless `--reveal`; terminal-gated, `--force`). |
-| `sanduk get <name>` | Print a value (terminal-gated, `--force`; `--field`/`--all`/`--reveal` for groups). |
+| `sanduk group get <name> KEY` | Inspect one field (redacted unless `--reveal`; terminal-gated, `--force`). |
+| `sanduk get <name>` | Inspect a value, redacted unless `--reveal` (terminal-gated, `--force`; `--field`/`--all` for groups). |
 | `sanduk exec [selector…] -- <cmd>` | Run a command with secrets injected (`--only`, `--except`, `--list`). |
 | `sanduk export [selector…]` | Emit secrets for scripts (`-f shell\|dotenv\|json`, `--only`, `--except`, `-o FILE`, `--force`). |
-| `sanduk list` | List names and metadata (never values; `--json`, `--names`). |
+| `sanduk list` | List names and metadata (never values; `--json`, `--names`). An entry with no metadata shows as `unknown`. |
 | `sanduk doctor [entry]` | Check a group against `.env.example` (`--template F`); exits 3 on missing keys. `--metadata [--fix]` checks config.toml against the vault. |
 | `sanduk allow [dir]` | Approve a repository's `.sanduk.toml` for `exec`/`export`/`doctor`. |
 | `sanduk remove <name>` | Delete an entry and its metadata (prompts; `--yes` when non-interactive). |
@@ -216,7 +216,7 @@ platform default — so one config file can serve several machines:
 | Backend | Notes |
 | --- | --- |
 | `keychain` | macOS login Keychain |
-| `keychain-biometric` (alias `biometric`) | macOS only, **experimental**: every read requires Touch ID / the login password |
+| `keychain-biometric` | macOS only, **experimental**: every read requires Touch ID / the login password |
 | `secret-service` | GNOME Keyring |
 | `kwallet` | KDE KWallet |
 | `wincred` | Windows Credential Manager |
@@ -358,11 +358,11 @@ direnv put secrets there; `exec` does not.
   keeps `--only` meaningful.
 - `--only` injects a least-privilege subset of a group, and an unknown key is an
   error rather than a silent omission. `--except` removes keys instead.
-- `sanduk get` refuses to print a secret to a non-terminal unless `--force` is
-  given. For a group, `--field KEY` prints one value, showing only its last four
-  characters unless `--reveal` is passed, so reviewing a secret never dumps the
-  whole group. This gate is a speed bump, not a boundary: `export` is ungated by
-  design, for scripts.
+- `sanduk get` is for inspecting: everything it prints shows only the last four
+  characters unless `--reveal` is passed, and it refuses to print to a
+  non-terminal unless `--force` is given. For a group, `--field KEY` reads one
+  value, so reviewing a secret never dumps the whole group. This gate is a speed
+  bump, not a boundary: `export` is ungated by design, for scripts.
 - Every variable name is validated when it is stored and again before it reaches
   a child or `export`'s output: a group field, a flat secret's name, an
   `ENVVAR=entry` binding and a name from config.toml alike. A name that is not a

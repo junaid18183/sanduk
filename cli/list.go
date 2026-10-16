@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newListCmd() *cobra.Command {
+func newListCmd(a *app) *cobra.Command {
 	var (
 		asJSON    bool
 		namesOnly bool
@@ -20,7 +20,7 @@ func newListCmd() *cobra.Command {
 		Short: "List vault entries (names and metadata only, never values)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := openVault()
+			v, err := a.openVault()
 			if err != nil {
 				return err
 			}
@@ -28,7 +28,7 @@ func newListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg, _, err := loadConfig()
+			cfg, err := a.loadConfig()
 			if err != nil {
 				return err
 			}
@@ -82,8 +82,13 @@ func describe(cfg *vault.Config, name string) (typ, info string) {
 		}
 		return "group", info
 	}
+	m, ok := cfg.Secrets[name]
+	if !ok {
+		// Without metadata the type cannot be known without reading the value.
+		return "unknown", "no metadata; run \"sanduk doctor --metadata --fix\""
+	}
 	info = cfg.EnvNameForSecret(name)
-	if m, ok := cfg.Secrets[name]; ok && m.Description != "" {
+	if m.Description != "" {
 		info = info + "  (" + m.Description + ")"
 	}
 	return "secret", info
