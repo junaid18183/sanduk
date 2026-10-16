@@ -118,7 +118,7 @@ func openKeyring(o Options) (keyring.Keyring, error) {
 		if err != nil {
 			return nil, err
 		}
-		return newAgeKeyring(path, o.passFunc()), nil
+		return newAgeKeyring(path, o.passFunc(), warn), nil
 
 	case "keychain-biometric":
 		return newBiometricKeyring(service)
@@ -138,7 +138,7 @@ func openKeyring(o Options) (keyring.Keyring, error) {
 			}
 			fmt.Fprintf(warn,
 				"sanduk: no OS keystore compiled in, using the encrypted file backend at %s\n", path)
-			return newAgeKeyring(path, o.passFunc()), nil
+			return newAgeKeyring(path, o.passFunc(), warn), nil
 		}
 		// Exactly one backend: keyring.Open silently moves on to the next
 		// allowed backend when one fails to open, so offering several would let

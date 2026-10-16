@@ -262,3 +262,22 @@ func TestAddGroupFromJSONFile(t *testing.T) {
 		t.Fatalf("group show = %q, %v", out, err)
 	}
 }
+
+// add judges an overwrite by what the backend holds, not by metadata that can
+// drift: config claiming "secret" must not let add destroy a group.
+func TestAddRefusesGroupDespiteDriftedMetadata(t *testing.T) {
+	cfg := testEnv(t)
+	src := filepath.Join(t.TempDir(), "w.env")
+	if err := writeFileString(src, "DB_URL=postgres://test\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCmd(t, "", "add-group", "warden", "--from-dotenv", src); err != nil {
+		t.Fatalf("add-group: %v", err)
+	}
+	if err := writeFileString(cfg, "[secrets.warden]\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCmd(t, "sk-test-value", "add", "warden"); err == nil {
+		t.Fatal("add overwrote a group because the metadata said secret")
+	}
+}

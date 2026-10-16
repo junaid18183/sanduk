@@ -94,7 +94,7 @@ go test ./vault -run TestNativeBackendsIncludesKeychainOnMacOS
 | `SANDUK_KEYCHAIN_PASSPHRASE` | Password used only when creating a dedicated keychain. |
 | `SANDUK_SERVICE` / `--service` | Keychain service name; default `sanduk`. Also names the age file, so a name, never a path. |
 | `SANDUK_CONFIG` / `--config` | Metadata config path; default `$XDG_CONFIG_HOME/sanduk/config.toml`, else `~/.config/sanduk/config.toml`. |
-| `SANDUK_TRUST` | Project-approval store; default `trusted.toml` next to the config (moves with `--config`). |
+| `SANDUK_TRUST` | Project-approval store; default `trusted.toml` next to the config (moves with `--config`). Resolved with the other settings (`settings.TrustPath`). |
 | `SANDUK_FILE_DIR` | Directory of the age vault; default `$XDG_DATA_HOME/sanduk`, else `~/.local/share/sanduk`. |
 | `SANDUK_FILE_PASSPHRASE` | Passphrase for the age backend (non-interactive). |
 | `EDITOR` | Used by `sanduk config --edit`; default `vi`. |
@@ -220,6 +220,10 @@ Break these and you break the tool's security model:
     or `--group`) refuse to overwrite existing entries without `--replace`; `add` refuses to
     turn a group into a flat secret without `--replace`; `remove` requires `--yes`
     when stdin is not a terminal. Failing closed matters more than convenience.
+    Decide from the backend, never from metadata alone, which can drift:
+    `refuseOverwrite` lists names (no decrypt), and `add` reads an existing entry
+    to learn its type. All non-fatal notices go to `Options.Warn`, never straight
+    to stderr, so callers such as completion can silence them.
 16. **Every variable name is validated on write and again on output**
     (`vault.ValidateEnvName`): in `vault.Exec` and `vault.FormatEnv`, which every
     name passes through after `--only`/`--except`. That covers group fields, flat

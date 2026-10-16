@@ -96,3 +96,13 @@ func TestTrustStoreInsideProjectIsRefused(t *testing.T) {
 		t.Fatal("consulted a trust store inside the project")
 	}
 }
+
+// A Project that was not loaded from a file has nothing to approve, and must
+// not be judged against a trust store relative to the working directory.
+func TestZeroProjectIsNeverTrusted(t *testing.T) {
+	tp := filepath.Join(t.TempDir(), TrustFileName)
+	ok, err := IsProjectTrusted(tp, &Project{Entry: "aws-prod"})
+	if err != nil || ok {
+		t.Fatalf("IsProjectTrusted(zero Project) = %v, %v; want false, nil", ok, err)
+	}
+}

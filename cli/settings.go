@@ -37,6 +37,7 @@ func resolveSetting(flagVal, envName, cfgVal, def string) (string, settingSource
 // settings is the resolved configuration for one invocation.
 type settings struct {
 	ConfigPath string
+	TrustPath  string
 	FileDir    string
 
 	Backend      string
@@ -61,7 +62,7 @@ func (a *app) resolveSettings() (*settings, error) {
 		cfg = &vault.Config{}
 	}
 
-	s := &settings{ConfigPath: path, FileDir: defaultFileDir()}
+	s := &settings{ConfigPath: path, TrustPath: trustPathFor(path), FileDir: defaultFileDir()}
 	// An empty backend means "let the platform decide".
 	s.Backend, s.BackendFrom = resolveSetting(a.backendFlag, "SANDUK_BACKEND", cfg.Backend, "")
 	s.Keychain, s.KeychainFrom = resolveSetting(a.keychainFlag, "SANDUK_KEYCHAIN", cfg.Keychain, vault.DefaultKeychainName())
@@ -73,6 +74,15 @@ func (a *app) resolveSettings() (*settings, error) {
 		a.warnf("sanduk: --keychain/SANDUK_KEYCHAIN is only used on macOS; ignoring %q\n", s.Keychain)
 	}
 	return s, cfgErr
+}
+
+// trustPathFor is the project trust store for a config path: SANDUK_TRUST, or
+// trusted.toml next to the config, so it moves with --config.
+func trustPathFor(configPath string) string {
+	if p := os.Getenv("SANDUK_TRUST"); p != "" {
+		return p
+	}
+	return filepath.Join(filepath.Dir(configPath), vault.TrustFileName)
 }
 
 // defaultConfigPath is the metadata config location without --config:

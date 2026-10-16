@@ -53,10 +53,13 @@ func newAddCmd(a *app) *cobra.Command {
 				return err
 			}
 			// Updating a flat secret in place is what add is for; anything else
-			// already stored under the name (a group, or an entry with no
-			// metadata) would be destroyed, so that needs --replace.
-			if _, isSecret := cfg.Secrets[name]; !isSecret {
-				if err := a.refuseOverwrite(v, name, replace, ""); err != nil {
+			// stored under the name would be destroyed, so that needs
+			// --replace. The type is read from the backend, not the metadata,
+			// which can drift: this costs one read of an existing entry (a
+			// Touch ID prompt on keychain-biometric), but the check fails
+			// closed.
+			if !replace {
+				if err := refuseNonSecret(v, name); err != nil {
 					return err
 				}
 			}
@@ -85,4 +88,21 @@ func newAddCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite an existing entry that is not a flat secret (e.g. a group)")
 	cmd.MarkFlagsMutuallyExclusive("from-env", "from-file")
 	return cmd
+}
+
+// refuseNonSecret fails when name exists in the vault as anything other than a
+// flat secret. A missing entry is fine: add creates it.
+func refuseNonSecret(v *vault.Vault, name string) error {
+	exists, err := v.Exists(name)
+	if err != nil || !exists {
+		return err
+	}
+	e, err := v.Get(name)
+	if err != nil {
+		return err
+	}
+	if e.Type != vault.TypeSecret {
+		return fmt.Errorf("%q is a %s; pass --replace to overwrite it with a flat secret", name, e.Type)
+	}
+	return nil
 }

@@ -33,7 +33,7 @@ list: ## list the entries in the vault
 
 add-legacy: ## add the key `make doctor` reports as missing
 	@echo "$(SANDUK) group set $(ENTRY) LEGACY_TOKEN --from-env"
-	@LEGACY_TOKEN=demo-legacy-token-not-secret $(SANDUK) group set $(ENTRY) --from-env LEGACY_TOKEN
+	@LEGACY_TOKEN=demo-legacy-token-not-secret $(SANDUK) group set $(ENTRY) LEGACY_TOKEN --from-env
 
 clean: ## remove the demo entry from the vault
 	$(SANDUK) remove $(ENTRY) --yes

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/junaid18183/sanduk/vault"
 )
@@ -49,14 +48,8 @@ func (a *app) resolved() *settings {
 // configPath is the metadata config in use.
 func (a *app) configPath() string { return a.resolved().ConfigPath }
 
-// trustPath is the project trust store: SANDUK_TRUST, or trusted.toml next to
-// the config, so it moves with --config.
-func (a *app) trustPath() string {
-	if p := os.Getenv("SANDUK_TRUST"); p != "" {
-		return p
-	}
-	return filepath.Join(filepath.Dir(a.configPath()), vault.TrustFileName)
-}
+// trustPath is the project trust store in use (see trustPathFor).
+func (a *app) trustPath() string { return a.resolved().TrustPath }
 
 // openVault opens the vault with the resolved settings. It refuses when the
 // config is unreadable: every command that opens the vault also reads or writes

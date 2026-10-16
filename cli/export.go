@@ -34,7 +34,8 @@ func newExportCmd(a *app) *cobra.Command {
 			"Prefer --output over a shell redirect: it writes the file with mode 0600\n" +
 			"(on Unix), whereas `export ... > .env` inherits your umask (often 0644).\n" +
 			"--output replaces the whole file and refuses an existing one unless --force\n" +
-			"is given; it never appends. Note that even\n" +
+			"is given; it never appends. A symlink at that path is replaced by a\n" +
+			"regular file rather than written through. Note that even\n" +
 			"then an exported file is a plaintext copy of the secrets; prefer exec when the\n" +
 			"values only need to reach one process.",
 		Args: cobra.ArbitraryArgs,
@@ -76,7 +77,8 @@ func newExportCmd(a *app) *cobra.Command {
 		"exclude these keys (comma-separated, repeatable)")
 	cmd.Flags().StringVarP(&output, "output", "o", "",
 		"write to this file (mode 0600) instead of stdout")
-	cmd.Flags().BoolVar(&force, "force", false, "replace an existing --output file")
+	cmd.Flags().BoolVar(&force, "force", false,
+		"replace an existing --output file (a symlink is replaced, not written through)")
 	cmd.ValidArgsFunction = a.completeSelector
 	return cmd
 }

@@ -31,7 +31,8 @@ func checkProjectOwner(path string) error {
 }
 
 // checkPrivateFile refuses a file that sanduk itself writes with mode 0600 but
-// that is now readable or writable by group or others. A trust store checked out
+// that is now readable or writable by group or others, or that another user
+// owns (unless running as root). A trust store checked out
 // by git (mode 0644) fails this, which is the point: sanduk never creates one
 // that way.
 func checkPrivateFile(path string) error {
@@ -42,8 +43,12 @@ func checkPrivateFile(path string) error {
 	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
 		return fmt.Errorf("%s has mode %#o; sanduk writes it as 0600 — fix with: chmod 600 %s", path, perm, path)
 	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
-		return fmt.Errorf("%s is owned by another user (uid %d)", path, st.Uid)
+	// Root can already read and rewrite any user's files, so refusing it
+	// protects nothing and only breaks `sudo sanduk` against a user's config.
+	if uid := os.Getuid(); uid != 0 {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != uid {
+			return fmt.Errorf("%s is owned by another user (uid %d)", path, st.Uid)
+		}
 	}
 	return nil
 }

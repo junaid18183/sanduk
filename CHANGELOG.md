@@ -99,9 +99,10 @@ security hole; each such change is listed under **Breaking**.
   unless `--reveal` is given. It is for inspection; scripts use `export`.
 - `list` shows an entry with no metadata as `unknown` instead of guessing
   `secret`.
-- `add`, `add-group` and `import` check for an existing entry by listing names
-  instead of reading it, so they no longer decrypt a value (or prompt for
-  Touch ID) just to refuse an overwrite.
+- `add-group` and `import` check for an existing entry by listing names instead
+  of reading it, so they no longer decrypt a value (or prompt for Touch ID) just
+  to refuse an overwrite. `add` still reads an existing entry once, to confirm
+  from the backend (not possibly-drifted metadata) that it is a flat secret.
 - `add-group --field KEY=VALUE` is refused; `--field KEY` now prompts for the
   value with echo off. `--from-json` takes a file path or `-` (stdin) instead of
   inline JSON. Values on the command line are visible in `ps`.
@@ -114,10 +115,12 @@ security hole; each such change is listed under **Breaking**.
   templates).
 - With no backend set, Linux uses the Secret Service only; select `kwallet` or
   `pass` with `--backend`. A failure to open the keystore is now an error.
-- `export -o FILE` refuses to replace an existing file unless `--force` is given.
+- `export -o FILE` refuses to replace an existing file unless `--force` is given,
+  and if FILE is a symlink it is replaced by a regular file, not written through.
 - `export --format dotenv` refuses a value containing `$` together with a single
   quote or a newline, which no dotenv quoting can represent without the reader
   expanding the `$`. Use `--format json` or `exec`.
 - `doctor` without an entry argument requires the `.sanduk.toml` to be approved.
-- A trust store with mode other than 0600 (group/other bits set) is refused;
-  fix with `chmod 600` on it.
+- A trust store with mode other than 0600 (group/other bits set), or owned by
+  another user, is refused; fix with `chmod 600` on it. Root may use a user's
+  files.

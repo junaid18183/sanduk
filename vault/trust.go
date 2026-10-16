@@ -75,6 +75,10 @@ func hashBytes(b []byte) string {
 // at tp. It compares
 // the hash of the bytes p was parsed from, never a fresh read of the file.
 func IsProjectTrusted(tp string, p *Project) (bool, error) {
+	if p.hash == "" || p.path == "" {
+		// Not loaded from a file (a zero Project): nothing to approve.
+		return false, nil
+	}
 	if err := checkTrustLocation(tp, p); err != nil {
 		return false, err
 	}
@@ -82,7 +86,7 @@ func IsProjectTrusted(tp string, p *Project) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return p.hash != "" && t.Files[p.path] == p.hash, nil
+	return t.Files[p.path] == p.hash, nil
 }
 
 // ApproveProject records p, as loaded, as approved in the trust store at tp and
