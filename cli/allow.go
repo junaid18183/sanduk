@@ -32,7 +32,7 @@ func newAllowCmd() *cobra.Command {
 				return fmt.Errorf("no %s found in %s or its parents", vault.ProjectFileName, dir)
 			}
 
-			hash, err := vault.ApproveProject(proj)
+			hash, err := vault.ApproveProject(trustPath(), proj)
 			if err != nil {
 				return err
 			}

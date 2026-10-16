@@ -22,7 +22,7 @@ func newRotateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			v, err := vault.New()
+			v, err := openVault()
 			if err != nil {
 				return err
 			}

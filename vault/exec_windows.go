@@ -24,7 +24,8 @@ func Exec(name string, args []string, env map[string]string) error {
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			os.Exit(exitErr.ExitCode())
+			// Pass the child's status through, as execve does on Unix.
+			return &ExitError{Code: exitErr.ExitCode()}
 		}
 		return fmt.Errorf("could not run %q: %w", name, err)
 	}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -37,20 +38,35 @@ func newRemoveCmd() *cobra.Command {
 				}
 			}
 
-			v, err := vault.New()
+			v, err := openVault()
 			if err != nil {
 				return err
 			}
-			if err := v.Remove(name); err != nil {
-				return err
+			removeErr := v.Remove(name)
+			if removeErr != nil && !errors.Is(removeErr, vault.ErrNotFound) {
+				return removeErr
 			}
 
-			// Best-effort metadata cleanup; ignore config errors here.
-			_ = updateConfig(func(c *vault.Config) {
-				delete(c.Secrets, name)
-				delete(c.Groups, name)
-			})
+			// Clean up the metadata even when the backend entry is already gone,
+			// so an orphaned record does not linger (and resurface as a stale env
+			// mapping for a later secret of the same name).
+			hadMeta := false
+			if err := updateConfig(func(c *vault.Config) {
+				_, s := c.Secrets[name]
+				_, g := c.Groups[name]
+				hadMeta = s || g
+				c.Forget(name)
+			}); err != nil {
+				warnf("warning: removed %q but could not update the config: %v\n", name, err)
+			}
 
+			if removeErr != nil {
+				if !hadMeta {
+					return removeErr
+				}
+				warnf("%q was not in the vault; removed its leftover metadata\n", name)
+				return nil
+			}
 			warnf("Removed %q\n", name)
 			return nil
 		},

@@ -58,7 +58,7 @@ func newGroupSetCmd() *cobra.Command {
 				return fmt.Errorf("--from-env and --from-dotenv are mutually exclusive")
 			}
 
-			v, err := vault.New()
+			v, err := openVault()
 			if err != nil {
 				return err
 			}
@@ -190,7 +190,7 @@ func newGroupUnsetCmd() *cobra.Command {
 			// the first removal already deleted.
 			keys := dedupeStrings(args[1:])
 
-			v, err := vault.New()
+			v, err := openVault()
 			if err != nil {
 				return err
 			}
@@ -214,7 +214,7 @@ func newGroupShowCmd() *cobra.Command {
 			"--only. Values are never printed; use \"sanduk group get\" for one value.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := vault.New()
+			v, err := openVault()
 			if err != nil {
 				return err
 			}
@@ -223,7 +223,7 @@ func newGroupShowCmd() *cobra.Command {
 				return err
 			}
 			for _, n := range names {
-				fmt.Fprintln(os.Stdout, n)
+				fmt.Fprintln(cmd.OutOrStdout(), n)
 			}
 
 			warnf("%d field(s) in group %q\n", len(names), args[0])
@@ -248,11 +248,12 @@ func newGroupGetCmd() *cobra.Command {
 			"given, and it prints a redacted value unless --reveal is passed.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !force && !vault.IsTerminal(os.Stdout) {
-				return fmt.Errorf("refusing to print a secret to a non-terminal; use --force to override")
+			out := cmd.OutOrStdout()
+			if err := requireTerminal(out, force); err != nil {
+				return err
 			}
 
-			v, err := vault.New()
+			v, err := openVault()
 			if err != nil {
 				return err
 			}
@@ -263,17 +264,7 @@ func newGroupGetCmd() *cobra.Command {
 			if e.Type != vault.TypeGroup {
 				return fmt.Errorf("%q is a flat secret; use \"sanduk get %s\"", args[0], args[0])
 			}
-			val, ok := e.Fields[args[1]]
-			if !ok {
-				return fmt.Errorf("%q has no field %q (fields: %s)",
-					args[0], args[1], strings.Join(sortedMapKeys(e.Fields), ", "))
-			}
-			if reveal {
-				fmt.Fprintln(os.Stdout, val)
-			} else {
-				fmt.Fprintln(os.Stdout, vault.Redact(val))
-			}
-			return nil
+			return printGroupField(out, args[0], e, args[1], reveal)
 		},
 	}
 

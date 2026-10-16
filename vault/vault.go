@@ -17,13 +17,10 @@ type Vault struct {
 	kr keyring.Keyring
 }
 
-// New opens the vault using the configured backend.
+// New opens the vault configured by the SANDUK_* environment variables. The CLI
+// uses Open with explicitly resolved Options.
 func New() (*Vault, error) {
-	kr, err := OpenKeyring()
-	if err != nil {
-		return nil, err
-	}
-	return &Vault{kr: kr}, nil
+	return Open(OptionsFromEnv())
 }
 
 // ValidateEntryName rejects names that cannot safely address one entry. An empty

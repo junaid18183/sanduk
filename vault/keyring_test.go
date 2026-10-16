@@ -69,8 +69,7 @@ func TestKeychainTarget(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		t.Setenv("SANDUK_KEYCHAIN", c.in)
-		got, err := keychainTarget()
+		got, err := keychainTarget(c.in)
 		if c.wantErr {
 			if err == nil {
 				t.Errorf("keychainTarget(%q) = %q, want an error", c.in, got)

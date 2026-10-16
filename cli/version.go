@@ -17,7 +17,7 @@ func newVersionCmd() *cobra.Command {
 		Short: "Print the sanduk version",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("sanduk " + version)
+			fmt.Fprintln(cmd.OutOrStdout(), "sanduk "+version)
 		},
 	}
 }

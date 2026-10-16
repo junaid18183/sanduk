@@ -50,7 +50,7 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 
-			v, err := vault.New()
+			v, err := openVault()
 			if err != nil {
 				return err
 			}

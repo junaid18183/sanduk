@@ -39,36 +39,10 @@ func newExportCmd() *cobra.Command {
 			"values only need to reach one process.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := vault.New()
+			env, err := resolveSelection(args, only, except)
 			if err != nil {
 				return err
 			}
-			cfg, _, err := loadConfig()
-			if err != nil {
-				return err
-			}
-
-			sels := args
-			if len(sels) == 0 {
-				entry, projOnly, err := defaultEntry()
-				if err != nil {
-					return err
-				}
-				sels = []string{entry}
-				if len(only) == 0 {
-					only = projOnly
-				}
-			}
-
-			env, err := resolveSelectors(v, cfg, parseSelectors(sels))
-			if err != nil {
-				return err
-			}
-			env, err = filterOnly(env, only)
-			if err != nil {
-				return err
-			}
-			env = filterExcept(env, except)
 
 			if output != "" {
 				if _, err := os.Lstat(output); err == nil && !force {
@@ -90,7 +64,7 @@ func newExportCmd() *cobra.Command {
 				}
 				return nil
 			}
-			return vault.FormatEnv(os.Stdout, env, format)
+			return vault.FormatEnv(cmd.OutOrStdout(), env, format)
 		},
 	}
 

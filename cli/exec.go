@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/junaid18183/sanduk/vault"
@@ -26,7 +25,8 @@ func newExecCmd() *cobra.Command {
 			"  OPENAI_API_KEY=openai   one flat secret, under the given variable name\n\n" +
 			"Use `--` to separate selectors from the command; that is what makes several\n" +
 			"selectors unambiguous. With a " + vault.ProjectFileName + " in the repository the\n" +
-			"entry can be omitted altogether.\n\n" +
+			"entry can be omitted altogether, once the file has been approved with\n" +
+			"\"sanduk allow\".\n\n" +
 			"  sanduk exec warden -- pnpm dev\n" +
 			"  sanduk exec BASE=base warden -- pnpm dev    # later selector wins\n" +
 			"  sanduk exec warden --only DB_URL -- psql\n" +
@@ -41,40 +41,15 @@ func newExecCmd() *cobra.Command {
 				return err
 			}
 
-			v, err := vault.New()
-			if err != nil {
-				return err
-			}
-			cfg, _, err := loadConfig()
-			if err != nil {
-				return err
-			}
-
 			// No selector means "the repository's default entry".
-			if len(sels) == 0 {
-				entry, projOnly, err := defaultEntry()
-				if err != nil {
-					return err
-				}
-				sels = []string{entry}
-				if len(only) == 0 {
-					only = projOnly
-				}
-			}
-
-			env, err := resolveSelectors(v, cfg, parseSelectors(sels))
+			env, err := resolveSelection(sels, only, except)
 			if err != nil {
 				return err
 			}
-			env, err = filterOnly(env, only)
-			if err != nil {
-				return err
-			}
-			env = filterExcept(env, except)
 
 			if list {
 				for _, k := range sortedMapKeys(env) {
-					fmt.Fprintln(os.Stdout, k)
+					fmt.Fprintln(cmd.OutOrStdout(), k)
 				}
 				warnf("%d variable(s) would be injected; nothing was run\n", len(env))
 				return nil

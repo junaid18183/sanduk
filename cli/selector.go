@@ -35,6 +35,42 @@ func parseSelectors(args []string) []selector {
 	return out
 }
 
+// resolveSelection is the pipeline exec and export share: open the vault, fall
+// back to the approved project file when no selector is given, resolve the
+// selectors left to right, then apply --only and --except. The project file's
+// `only` applies only when --only was not given.
+func resolveSelection(sels, only, except []string) (map[string]string, error) {
+	v, err := openVault()
+	if err != nil {
+		return nil, err
+	}
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(sels) == 0 {
+		entry, projOnly, err := defaultEntry()
+		if err != nil {
+			return nil, err
+		}
+		sels = []string{entry}
+		if len(only) == 0 {
+			only = projOnly
+		}
+	}
+
+	env, err := resolveSelectors(v, cfg, parseSelectors(sels))
+	if err != nil {
+		return nil, err
+	}
+	env, err = filterOnly(env, only)
+	if err != nil {
+		return nil, err
+	}
+	return filterExcept(env, except), nil
+}
+
 // resolveSelectors expands selectors left to right and merges the results. A
 // later selector wins when two of them produce the same variable, so a base
 // entry can be overridden by a narrower one.
@@ -87,7 +123,7 @@ func filterOnly(env map[string]string, only []string) (map[string]string, error)
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("no such key in the selection: %s (available: %s)",
-			quoteList(missing), quoteList(envKeys(env)))
+			quoteList(missing), quoteList(sortedMapKeys(env)))
 	}
 	return out, nil
 }
@@ -126,15 +162,6 @@ func splitOnly(flags []string) []string {
 		}
 	}
 	return out
-}
-
-func envKeys(env map[string]string) []string {
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // quoteList renders names for an error message, sorted and quoted so an empty

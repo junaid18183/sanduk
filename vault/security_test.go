@@ -106,13 +106,11 @@ func TestEmptyEntryNameIsRejected(t *testing.T) {
 
 func TestServiceNameRejectsPaths(t *testing.T) {
 	for _, s := range []string{"../../x", "a/b", `a\b`, ".", ".."} {
-		t.Setenv("SANDUK_SERVICE", s)
-		if _, err := serviceName(); err == nil {
+		if _, err := serviceName(s); err == nil {
 			t.Errorf("serviceName accepted %q", s)
 		}
 	}
-	t.Setenv("SANDUK_SERVICE", "work")
-	if got, err := serviceName(); err != nil || got != "work" {
+	if got, err := serviceName("work"); err != nil || got != "work" {
 		t.Fatalf("serviceName(work) = %q, %v", got, err)
 	}
 }

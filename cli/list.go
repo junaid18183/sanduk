@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"text/tabwriter"
 
 	"github.com/junaid18183/sanduk/vault"
@@ -21,7 +20,7 @@ func newListCmd() *cobra.Command {
 		Short: "List vault entries (names and metadata only, never values)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := vault.New()
+			v, err := openVault()
 			if err != nil {
 				return err
 			}
@@ -36,7 +35,7 @@ func newListCmd() *cobra.Command {
 
 			if namesOnly {
 				for _, n := range names {
-					fmt.Fprintln(os.Stdout, n)
+					fmt.Fprintln(cmd.OutOrStdout(), n)
 				}
 				return nil
 			}
@@ -52,12 +51,12 @@ func newListCmd() *cobra.Command {
 					typ, info := describe(cfg, name)
 					rows = append(rows, row{Name: name, Type: typ, Info: info})
 				}
-				enc := json.NewEncoder(os.Stdout)
+				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
 				return enc.Encode(rows)
 			}
 
-			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tTYPE\tENV / INFO")
 			for _, name := range names {
 				typ, info := describe(cfg, name)

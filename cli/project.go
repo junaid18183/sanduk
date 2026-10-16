@@ -38,7 +38,7 @@ func defaultEntry() (entry string, only []string, err error) {
 // requireTrustedProject refuses an unapproved (or edited) project file and tells
 // the user how to approve it.
 func requireTrustedProject(path string, proj *vault.Project) error {
-	ok, err := vault.IsProjectTrusted(proj)
+	ok, err := vault.IsProjectTrusted(trustPath(), proj)
 	if err != nil {
 		return err
 	}

@@ -122,7 +122,7 @@ func newAddGroupCmd() *cobra.Command {
 				return errNoFields()
 			}
 
-			v, err := vault.New()
+			v, err := openVault()
 			if err != nil {
 				return err
 			}

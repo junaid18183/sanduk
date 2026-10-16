@@ -42,8 +42,31 @@ security hole; each such change is listed under **Breaking**.
 - The age backend confirms the passphrase when the vault file is empty (as when
   it is missing) and warns when the file is readable by group or others.
 
+### Fixed
+
+- A broken config.toml no longer drops `--backend`/`--keychain`/`--service`: a
+  write used to land in the platform keystore and then fail on the metadata
+  update. Commands that open the vault now refuse up front; `sanduk config`
+  still works.
+- `--config` now also moves the trust store (`trusted.toml`).
+- Concurrent commands no longer lose each other's metadata updates: config
+  writes take a cross-process lock.
+- The age backend and config lock now work on Windows (`LockFileEx`).
+- `remove` cleans up metadata left behind for an entry the backend no longer
+  has, and reports a failed config update instead of ignoring it.
+- Errors from config, trust store and `.env` parsing name the file.
+
+### Added
+
+- `sanduk doctor --metadata [--fix]` reports and repairs drift between the vault
+  and config.toml.
+
 ### Breaking
 
+- Flat `import` refuses to overwrite existing entries unless `--replace` is
+  given (it used to warn and overwrite, including whole groups).
+- `doctor` exits with status 3 (not 1) when keys are missing, so scripts can
+  tell drift from failure.
 - `add-group --field KEY=VALUE` is refused; `--field KEY` now prompts for the
   value with echo off. `--from-json` takes a file path or `-` (stdin) instead of
   inline JSON. Values on the command line are visible in `ps`.

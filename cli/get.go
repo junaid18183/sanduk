@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -28,11 +29,12 @@ func newGetCmd() *cobra.Command {
 			"field is the least-privilege way to review one secret.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !force && !vault.IsTerminal(os.Stdout) {
-				return fmt.Errorf("refusing to print a secret to a non-terminal; use --force to override")
+			out := cmd.OutOrStdout()
+			if err := requireTerminal(out, force); err != nil {
+				return err
 			}
 
-			v, err := vault.New()
+			v, err := openVault()
 			if err != nil {
 				return err
 			}
@@ -46,27 +48,17 @@ func newGetCmd() *cobra.Command {
 				if field != "" || all {
 					return fmt.Errorf("%q is a flat secret; --field and --all apply to groups", args[0])
 				}
-				fmt.Fprintln(os.Stdout, e.Value)
+				fmt.Fprintln(out, e.Value)
 
 			case vault.TypeGroup:
 				if field != "" {
-					val, ok := e.Fields[field]
-					if !ok {
-						return fmt.Errorf("%q has no field %q (fields: %s)",
-							args[0], field, strings.Join(sortedMapKeys(e.Fields), ", "))
-					}
-					if reveal {
-						fmt.Fprintln(os.Stdout, val)
-					} else {
-						fmt.Fprintln(os.Stdout, vault.Redact(val))
-					}
-					return nil
+					return printGroupField(out, args[0], e, field, reveal)
 				}
 				if !all {
 					return fmt.Errorf("%q is a group with %d field(s); pass --field KEY to print one, or --all for every field",
 						args[0], len(e.Fields))
 				}
-				enc := json.NewEncoder(os.Stdout)
+				enc := json.NewEncoder(out)
 				enc.SetIndent("", "  ")
 				return enc.Encode(e.Fields)
 
@@ -84,4 +76,31 @@ func newGetCmd() *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("field", "all")
 	cmd.ValidArgsFunction = completeEntryNames
 	return cmd
+}
+
+// requireTerminal refuses to print a secret anywhere but a terminal unless
+// force is set, so a value cannot quietly end up in a pipe, a log or an agent's
+// captured output.
+func requireTerminal(w io.Writer, force bool) error {
+	if force {
+		return nil
+	}
+	if f, ok := w.(*os.File); ok && vault.IsTerminal(f) {
+		return nil
+	}
+	return fmt.Errorf("refusing to print a secret to a non-terminal; use --force to override")
+}
+
+// printGroupField prints one field of group entry e, redacted unless reveal.
+func printGroupField(w io.Writer, name string, e *vault.Entry, field string, reveal bool) error {
+	val, ok := e.Fields[field]
+	if !ok {
+		return fmt.Errorf("%q has no field %q (fields: %s)",
+			name, field, strings.Join(sortedMapKeys(e.Fields), ", "))
+	}
+	if !reveal {
+		val = vault.Redact(val)
+	}
+	_, err := fmt.Fprintln(w, val)
+	return err
 }

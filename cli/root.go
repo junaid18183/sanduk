@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -24,13 +25,19 @@ var serviceFlag string
 func Execute() error {
 	root := newRootCmd()
 	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "sanduk: "+err.Error())
+		// A bare exit status (the child of exec on Windows) has already
+		// reported itself; anything else is ours to print.
+		var exit *vault.ExitError
+		if !errors.As(err, &exit) || exit.Err != nil {
+			fmt.Fprintln(os.Stderr, "sanduk: "+err.Error())
+		}
 		return err
 	}
 	return nil
 }
 
 func newRootCmd() *cobra.Command {
+	resolved, settingsErr = nil, nil
 	root := &cobra.Command{
 		Use:   "sanduk",
 		Short: "sanduk is a vault for API keys and secrets in development",
@@ -41,21 +48,11 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Resolve the backend settings from flag > env > config > default and
-			// hand them to the vault package, which reads them from the
-			// environment (see SANDUK_BACKEND / SANDUK_KEYCHAIN / SANDUK_SERVICE).
-			s, err := resolveSettings()
-			if err != nil {
-				// A broken config must not brick every command, including
-				// `sanduk config`, which is how you would inspect it. Remember
-				// the failure and let each command report it.
-				settingsErr = err
-				resolved = nil
-				return nil
-			}
-			resolved = s
-			settingsErr = nil
-			return exportSettings(s)
+			// Resolve flag > env > config > default once. A broken config is
+			// remembered rather than fatal: `sanduk config` is how you would
+			// inspect it, and the commands that need the config report it.
+			resolved, settingsErr = resolveSettings()
+			return nil
 		},
 	}
 
@@ -89,10 +86,7 @@ func newRootCmd() *cobra.Command {
 
 // loadConfig loads the metadata config from the resolved location.
 func loadConfig() (*vault.Config, string, error) {
-	path := cfgFile
-	if path == "" {
-		path = vault.ConfigPath()
-	}
+	path := configPath()
 	cfg, err := vault.LoadConfig(path)
 	if err != nil {
 		return nil, path, err
@@ -100,12 +94,10 @@ func loadConfig() (*vault.Config, string, error) {
 	return cfg, path, nil
 }
 
-// updateConfig loads, mutates, and saves the metadata config.
+// updateConfig loads, mutates and saves the metadata config under a lock.
 func updateConfig(fn func(*vault.Config)) error {
-	cfg, path, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	fn(cfg)
-	return vault.SaveConfig(path, cfg)
+	return vault.UpdateConfig(configPath(), func(c *vault.Config) error {
+		fn(c)
+		return nil
+	})
 }

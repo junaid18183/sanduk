@@ -15,7 +15,7 @@ func TestTrustStoreWithLoosePermissionsIsRefused(t *testing.T) {
 	t.Setenv("SANDUK_TRUST", tp)
 
 	p := loadTestProject(t, dir)
-	if _, err := ApproveProject(p); err != nil {
+	if _, err := ApproveProject(TrustPath(), p); err != nil {
 		t.Fatalf("ApproveProject: %v", err)
 	}
 	// A trust store git checked out, or one someone loosened, has group/other
@@ -23,7 +23,7 @@ func TestTrustStoreWithLoosePermissionsIsRefused(t *testing.T) {
 	if err := os.Chmod(tp, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := IsProjectTrusted(p); err == nil {
+	if _, err := IsProjectTrusted(TrustPath(), p); err == nil {
 		t.Fatal("trusted a world-readable trust store")
 	}
 }

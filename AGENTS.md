@@ -151,8 +151,9 @@ Break these and you break the tool's security model:
 5. **`exec` replaces the current process (`execve`) on Unix** so secrets exist
    only in the child. Windows has no `execve` and waits on the child instead.
 6. **Every backend implements `keyring.Keyring`** (`Get`, `GetMetadata`, `Set`,
-   `Remove`, `Keys`). New backends are selected in `vault/keyring.go` from
-   `SANDUK_BACKEND` / `--backend`.
+   `Remove`, `Keys`). New backends are selected in `vault/keyring.go`
+   (`openKeyring`) from `vault.Options.Backend`, which the CLI resolves from
+   `--backend`, `SANDUK_BACKEND` or the config file.
 7. **macOS binaries must be built with `CGO_ENABLED=1`.** Both the Keychain
    backend (`99designs/keyring`, tag `darwin && cgo`) and the
    `keychain-biometric` backend require cgo. A `CGO_ENABLED=0` macOS build has no
@@ -178,13 +179,17 @@ Break these and you break the tool's security model:
     name, never a path (`keychainTarget()` rejects separators). The default stays
     `login`; see the README for why a second keychain is not automatically safer.
 12. **Config-file backend settings are defaults, never overrides.** Precedence is
-    flag > env > config > platform default, resolved once in `PersistentPreRunE`
-    (`cli/settings.go`) and exported as the `SANDUK_*` variables the vault
-    package reads. Commands must report the resolved copy (`resolved`, set by
-    that hook), not re-resolve: after the export, every value would look like it
-    came `from env`. A broken config must not brick `sanduk config` — it is how
-    you inspect the config — so the failure lands in `settingsErr` and the
-    commands that need the config report it themselves.
+    flag > env > config > platform default, resolved once (`currentSettings()` in
+    `cli/settings.go`, primed by `PersistentPreRunE`) and passed to the vault as
+    `vault.Options` via `openVault()` — never exported back into the environment.
+    Commands open the vault with `openVault()`, not `vault.New()` (which reads
+    only the environment and exists for tests). The config and trust paths come
+    from `configPath()`/`trustPath()`, so `--config` moves both. A broken config
+    still resolves flags and env (so `--backend` is honoured), lands in
+    `settingsErr`, and makes `openVault()` refuse — but `sanduk config`, which
+    does not open the vault, keeps working so you can inspect it. Config
+    read-modify-writes go through `vault.UpdateConfig`, which holds a
+    cross-process lock.
 13. **`exec` never hands the child a `SANDUK_*` variable.** `buildEnv` drops the
     prefix from the inherited environment, because `SANDUK_FILE_PASSPHRASE` and
     `SANDUK_KEYCHAIN_PASSPHRASE` each unlock the whole vault; leaking one would
@@ -197,8 +202,8 @@ Break these and you break the tool's security model:
     second read. The store is `trusted.toml` (non-secret, mode 0600); a store
     inside the project, or one readable by group/other, is refused, since
     `SANDUK_TRUST`/`SANDUK_CONFIG` can move it.
-15. **Destructive writes are never the default.** `add-group`/`import --group`
-    refuse to overwrite an existing group without `--replace`; `add` refuses to
+15. **Destructive writes are never the default.** `add-group` and `import` (flat
+    or `--group`) refuse to overwrite existing entries without `--replace`; `add` refuses to
     turn a group into a flat secret without `--replace`; `remove` requires `--yes`
     when stdin is not a terminal. Failing closed matters more than convenience.
 16. **Every variable name is validated on write and again on output**

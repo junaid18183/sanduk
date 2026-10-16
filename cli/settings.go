@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 
@@ -35,6 +36,7 @@ func resolveSetting(flagVal, envName, cfgVal, def string) (string, settingSource
 
 // settings is the resolved backend configuration.
 type settings struct {
+	ConfigPath   string
 	Backend      string
 	Keychain     string
 	Service      string
@@ -43,16 +45,22 @@ type settings struct {
 	ServiceFrom  settingSource
 }
 
-// resolveSettings loads the config and resolves the backend settings from it.
+// resolveSettings resolves the backend settings from flag > env > config >
+// default. A config file that cannot be read is reported as the error, but the
+// settings are still resolved from the flags and environment: a broken config
+// must not make `--backend file` silently fall back to the platform keystore.
 func resolveSettings() (*settings, error) {
-	cfg, _, err := loadConfig()
-	if err != nil {
-		return nil, err
+	path := cfgFile
+	if path == "" {
+		path = vault.ConfigPath()
+	}
+	cfg, cfgErr := vault.LoadConfig(path)
+	if cfgErr != nil {
+		cfg = &vault.Config{}
 	}
 
-	s := &settings{}
-	// An empty backend means "let the platform decide", which the vault package
-	// also expresses as an empty SANDUK_BACKEND.
+	s := &settings{ConfigPath: path}
+	// An empty backend means "let the platform decide".
 	s.Backend, s.BackendFrom = resolveSetting(backendFlag, "SANDUK_BACKEND", cfg.Backend, "")
 	s.Keychain, s.KeychainFrom = resolveSetting(keychainFlag, "SANDUK_KEYCHAIN", cfg.Keychain, vault.DefaultKeychainName())
 	s.Service, s.ServiceFrom = resolveSetting(serviceFlag, "SANDUK_SERVICE", cfg.Service, vault.DefaultService())
@@ -62,36 +70,51 @@ func resolveSettings() (*settings, error) {
 	if runtime.GOOS != "darwin" && s.KeychainFrom != sourceDefault {
 		warnf("sanduk: --keychain/SANDUK_KEYCHAIN is only used on macOS; ignoring %q\n", s.Keychain)
 	}
-	return s, nil
+	return s, cfgErr
 }
 
-// exportSettings makes the resolved settings visible to the vault package,
-// which reads them from the environment.
-func exportSettings(s *settings) error {
-	values := []struct {
-		name  string
-		value string
-	}{
-		{"SANDUK_BACKEND", s.Backend},
-		{"SANDUK_KEYCHAIN", s.Keychain},
-		{"SANDUK_SERVICE", s.Service},
-	}
-	for _, v := range values {
-		if v.value == "" {
-			continue
-		}
-		if err := os.Setenv(v.name, v.value); err != nil {
-			return err
-		}
-	}
-	return nil
+// options turns the resolved settings into what the vault package needs. The
+// age passphrase and the keychain-creation passphrase are secrets, so they only
+// ever come from the environment (or a prompt), never from config or flags.
+func (s *settings) options() vault.Options {
+	o := vault.OptionsFromEnv()
+	o.Backend = s.Backend
+	o.Keychain = s.Keychain
+	o.Service = s.Service
+	return o
 }
 
-// resolved and settingsErr hold the outcome of PersistentPreRunE so commands can
-// report it without resolving a second time. Resolving again would be wrong:
-// exportSettings has already written the values into the environment, so the
-// original source would be reported as "env" for everything.
+// resolved and settingsErr hold the settings for the running command. They are
+// resolved once, by PersistentPreRunE or on first use (shell completion does not
+// run PersistentPreRunE), and reset by newRootCmd.
 var (
 	resolved    *settings
 	settingsErr error
 )
+
+// currentSettings returns the resolved settings, resolving them on first use.
+// The result is never nil; settingsErr says whether the config was readable.
+func currentSettings() *settings {
+	if resolved == nil {
+		resolved, settingsErr = resolveSettings()
+	}
+	return resolved
+}
+
+// configPath is the metadata config in use (--config, SANDUK_CONFIG, default).
+func configPath() string { return currentSettings().ConfigPath }
+
+// trustPath is the project trust store for the config in use.
+func trustPath() string { return vault.TrustPathFor(configPath()) }
+
+// openVault opens the vault with the resolved settings. It refuses when the
+// config is unreadable: every command that opens the vault also reads or writes
+// its metadata, and failing after a backend write would leave the two out of
+// step. `sanduk config` does not open the vault, so it still works.
+func openVault() (*vault.Vault, error) {
+	s := currentSettings()
+	if settingsErr != nil {
+		return nil, fmt.Errorf("config is unreadable (inspect it with \"sanduk config\"): %w", settingsErr)
+	}
+	return vault.Open(s.options())
+}

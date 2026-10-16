@@ -3,7 +3,6 @@ package cli
 import (
 	"os"
 
-	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +24,7 @@ func entryNames() []string {
 	if !completionCanReadVault() {
 		return nil
 	}
-	v, err := vault.New()
+	v, err := openVault()
 	if err != nil {
 		return nil
 	}
@@ -41,7 +40,7 @@ func entryNames() []string {
 // encrypted file backend prompts unless its passphrase is already available in
 // the environment.
 func completionCanReadVault() bool {
-	switch os.Getenv("SANDUK_BACKEND") {
+	switch currentSettings().Backend {
 	case "file", "age":
 		return os.Getenv("SANDUK_FILE_PASSPHRASE") != ""
 	}
