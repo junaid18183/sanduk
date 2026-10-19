@@ -78,10 +78,11 @@ func SafeFilename(envName string, p FilePayload) string {
 	return name
 }
 
-// MaterializeInto writes every payload into dir as a 0600 file and returns the
-// variable-to-path mapping. The directory is created 0700 if it does not
-// exist. Unlike the exec path, these files outlive the command: the caller
-// asked for real paths and owns removing them.
+// MaterializeInto writes every payload into dir and returns the
+// variable-to-path mapping. Files are created 0600 and the directory 0700
+// where the OS has permission bits; Windows reports 0666 whatever is asked
+// for, as it does for export --output. Unlike the exec path, these files
+// outlive the command: the caller asked for real paths and owns removing them.
 func MaterializeInto(dir string, files map[string]FilePayload) (map[string]string, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("no directory given for file secrets")

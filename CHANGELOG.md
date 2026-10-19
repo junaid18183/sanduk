@@ -31,8 +31,8 @@ vault only into the process that needs it.
   `exec` gives the child a path to it. On Unix the bytes go to a temporary file
   that is unlinked at once and passed as `/dev/fd/N` for the inherited
   descriptor, so nothing readable is left on disk and the data is freed when
-  the child exits. `--materialize DIR` writes real `0600` files for tools that
-  need a path with an extension; those persist. `export --materialize DIR`
+  the child exits. `--materialize DIR` writes real files (mode `0600` on Unix)
+  for tools that need a path with an extension; those persist. `export --materialize DIR`
   writes them out; `get` reports size and filename and never prints the bytes,
   not even with `--reveal`.
 - **Import from a credential manager.** `import` now reads CSV exports and

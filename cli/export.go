@@ -88,7 +88,7 @@ func newExportCmd(a *app) *cobra.Command {
 	cmd.Flags().StringVarP(&output, "output", "o", "",
 		"write to this file (mode 0600) instead of stdout")
 	cmd.Flags().StringVar(&materialize, "materialize", "",
-		"write file secrets as 0600 files in this directory and export their paths")
+		"write file secrets as real files in this directory (0600 on Unix) and export their paths")
 	cmd.Flags().BoolVar(&force, "force", false,
 		"replace an existing --output file (a symlink is replaced, not written through)")
 	cmd.ValidArgsFunction = a.completeSelector

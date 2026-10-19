@@ -88,7 +88,7 @@ func newExecCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&list, "list", false,
 		"print the variable names that would be injected, without running anything")
 	cmd.Flags().StringVar(&materialize, "materialize", "",
-		"write file secrets as real 0600 files in this directory instead of /dev/fd")
+		"write file secrets as real files in this directory (0600 on Unix) instead of /dev/fd")
 	cmd.ValidArgsFunction = a.completeSelector
 	return cmd
 }

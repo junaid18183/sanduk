@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,15 +118,20 @@ func TestExportMaterializeWritesTheFile(t *testing.T) {
 	seedFileSecret(t)
 	dir := filepath.Join(t.TempDir(), "creds")
 
-	out, err := runCmd(t, "", "export", "gcp", "--format", "dotenv", "--materialize", dir)
+	// JSON, not dotenv: a Windows path contains backslashes, which dotenv
+	// quotes, and this test wants the path rather than its encoding.
+	out, err := runCmd(t, "", "export", "gcp", "--format", "json", "--materialize", dir)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
-	prefix := "GOOGLE_APPLICATION_CREDENTIALS="
-	if !strings.Contains(out, prefix) {
+	var env map[string]string
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("export = %q: %v", out, err)
+	}
+	path, ok := env["GOOGLE_APPLICATION_CREDENTIALS"]
+	if !ok {
 		t.Fatalf("export = %q", out)
 	}
-	path := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(out), prefix))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)

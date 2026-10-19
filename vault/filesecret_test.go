@@ -3,6 +3,7 @@ package vault
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -109,12 +110,16 @@ func TestMaterializeIntoWritesPrivateFiles(t *testing.T) {
 	if string(got) != "{}" {
 		t.Fatalf("contents = %q", got)
 	}
-	info, err := os.Stat(paths["GCP"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("mode = %o, want 600", perm)
+	// Permission bits are a Unix concept; Windows reports 0666 whatever mode
+	// the file was created with, as it does for export --output.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(paths["GCP"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Fatalf("mode = %o, want 600", perm)
+		}
 	}
 	if filepath.Base(paths["GCP"]) != "sa.json" {
 		t.Fatalf("path = %q", paths["GCP"])

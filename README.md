@@ -173,8 +173,8 @@ sanduk exec gcp -- sh -c 'cat "$GOOGLE_APPLICATION_CREDENTIALS"'
 ```
 
 For a tool that insists on a real path with an extension, `--materialize DIR`
-writes `0600` files there instead. Those persist: `exec` replaces the sanduk
-process, so there is nobody left to delete them.
+writes real files there instead, mode `0600` on Unix. Those persist: `exec`
+replaces the sanduk process, so there is nobody left to delete them.
 
 `get` describes a file secret — its size and filename — and never prints the
 bytes, whatever flags you pass. To get the contents back out, use
@@ -637,7 +637,7 @@ there; `exec` does not. Plaintext reaches disk only where you ask for it:
   `/dev/fd/N` for the descriptor it inherits, so the data has no name on disk
   and is freed when the child exits. `exec --materialize DIR` and
   `export --materialize DIR` are the deliberate exceptions: they write real
-  `0600` files, and those persist until you delete them. `get` never prints file
+  files (mode `0600` on Unix), and those persist until you delete them. `get` never prints file
   bytes, whatever flags you pass.
 - **`sanduk scan` is the one command that reads every value**, because it cannot
   search for secrets it has not loaded. It says so and asks before doing it, and
