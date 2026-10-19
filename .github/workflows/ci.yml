@@ -13,6 +13,9 @@ permissions:
 # Actions are pinned to full commit SHAs (tags can be moved); Dependabot keeps
 # them current. Tool versions are pinned too, so a green build is reproducible.
 env:
+  # The Go line to build and test with: always its newest patch, so a stdlib
+  # security fix (govulncheck reports those) lands without a go.mod change.
+  GO_VERSION: "1.26.x"
   GOLANGCI_LINT_VERSION: v2.14.0
   GOVULNCHECK_VERSION: v1.8.0
   GORELEASER_VERSION: v2.18.2
@@ -35,21 +38,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
-
-      - name: gofmt
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "these files are not gofmt'd:"
-            echo "$unformatted"
-            exit 1
-          fi
-
-      - name: go mod tidy
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
+          go-version: ${{ env.GO_VERSION }}
 
       - name: go vet
         run: go vet ./...
@@ -87,7 +76,23 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
+
+      # gofmt and go mod tidy are platform-independent, so they run once here
+      # rather than in every matrix job.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
 
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
