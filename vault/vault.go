@@ -68,6 +68,21 @@ func (v *Vault) AddSecret(name, value string) error {
 	return v.put(name, &Entry{Version: entryVersion, Type: TypeSecret, Value: value})
 }
 
+// AddFile stores (or replaces) a file secret: bytes a program must read from
+// a path rather than an environment variable. filename is the basename to
+// give it when materialized, and may be empty.
+func (v *Vault) AddFile(name string, data []byte, filename string) error {
+	if len(data) == 0 {
+		return fmt.Errorf("refusing to store an empty file as %q", name)
+	}
+	return v.put(name, &Entry{
+		Version:  entryVersion,
+		Type:     TypeFile,
+		Data:     data,
+		Filename: filename,
+	})
+}
+
 // AddGroup stores (or replaces) a grouped entry. Field names become child
 // environment variables, so each is validated before it is stored.
 func (v *Vault) AddGroup(name string, fields map[string]string) error {
@@ -385,29 +400,52 @@ func (v *Vault) List() ([]string, error) {
 	return keys, nil
 }
 
-// ResolveEnv expands a named entry into environment variables.
+// ResolveEnv expands a named entry into environment variables. It is the
+// variables-only view: a file secret has no value until it is materialized, so
+// an entry that needs one is refused here. Callers that can materialize use
+// ResolveEntry.
+func (v *Vault) ResolveEnv(name string, cfg *Config) (map[string]string, error) {
+	env, files, err := v.ResolveEntry(name, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) > 0 {
+		return nil, fmt.Errorf("%q is a file secret; it has no value to print, only a path "+
+			"(use \"sanduk exec\", or \"sanduk export --materialize DIR\")", name)
+	}
+	return env, nil
+}
+
+// ResolveEntry expands a named entry into environment variables plus any file
+// secrets the caller must materialize, keyed by the variable that will hold
+// each one's path.
 //
 //   - A flat secret becomes a single variable, named by the config mapping or
 //     the upper-cased entry name.
 //   - A group contributes one variable per field; field names are env names.
-func (v *Vault) ResolveEnv(name string, cfg *Config) (map[string]string, error) {
+//   - A file secret contributes one payload under its mapped variable name.
+func (v *Vault) ResolveEntry(name string, cfg *Config) (map[string]string, map[string]FilePayload, error) {
 	e, err := v.Get(name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	switch e.Type {
 	case TypeSecret:
-		return map[string]string{cfg.EnvNameForSecret(name): e.Value}, nil
+		return map[string]string{cfg.EnvNameForSecret(name): e.Value}, nil, nil
+	case TypeFile:
+		return nil, map[string]FilePayload{
+			cfg.EnvNameForSecret(name): {Filename: e.Filename, Data: e.Data},
+		}, nil
 	case TypeGroup:
 		out := make(map[string]string, len(e.Fields)+len(e.Links))
 		for k, val := range e.Fields {
 			out[k] = val
 		}
 		if err := v.resolveLinks(name, e, out); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return out, nil
+		return out, nil, nil
 	default:
-		return nil, fmt.Errorf("unknown entry type %q", e.Type)
+		return nil, nil, fmt.Errorf("unknown entry type %q", e.Type)
 	}
 }

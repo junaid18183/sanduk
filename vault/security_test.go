@@ -56,7 +56,9 @@ func TestFormatEnvRejectsLoaderName(t *testing.T) {
 
 func TestExecRejectsLoaderName(t *testing.T) {
 	// Exec validates before looking the command up, so this never runs anything.
-	err := Exec("definitely-not-a-command", nil, map[string]string{"DYLD_INSERT_LIBRARIES": "/tmp/x.dylib"})
+	err := Exec("definitely-not-a-command", nil, ExecOptions{
+		Env: map[string]string{"DYLD_INSERT_LIBRARIES": "/tmp/x.dylib"},
+	})
 	if err == nil || !strings.Contains(err.Error(), "DYLD_INSERT_LIBRARIES") {
 		t.Fatalf("Exec = %v, want a refusal naming DYLD_INSERT_LIBRARIES", err)
 	}

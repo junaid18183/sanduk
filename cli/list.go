@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"text/tabwriter"
+	"time"
 
 	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
@@ -80,16 +81,46 @@ func describe(cfg *vault.Config, name string) (typ, info string) {
 		if info == "" {
 			info = "-"
 		}
-		return "group", info
+		return "group", info + expiryNote(g.Expires)
+	}
+	if m, ok := cfg.Files[name]; ok {
+		return "file", describeSecretMeta(cfg, name, m)
 	}
 	m, ok := cfg.Secrets[name]
 	if !ok {
 		// Without metadata the type cannot be known without reading the value.
 		return "unknown", "no metadata; run \"sanduk doctor --metadata --fix\""
 	}
-	info = cfg.EnvNameForSecret(name)
+	return "secret", describeSecretMeta(cfg, name, m)
+}
+
+// describeSecretMeta renders the INFO column for a flat or file secret: the
+// variable it is exposed as, then any description and deadline.
+func describeSecretMeta(cfg *vault.Config, name string, m vault.SecretMeta) string {
+	info := cfg.EnvNameForSecret(name)
 	if m.Description != "" {
 		info = info + "  (" + m.Description + ")"
 	}
-	return "secret", info
+	return info + expiryNote(m.Expires)
+}
+
+// expiryNote renders a deadline for the list's INFO column. An overdue entry
+// says so rather than printing a date the reader has to compare against today.
+func expiryNote(date string) string {
+	if date == "" {
+		return ""
+	}
+	t, err := vault.ParseExpiry(date)
+	if err != nil {
+		return "  [expires " + date + "?]"
+	}
+	if daysUntil(t) < 0 {
+		return "  [EXPIRED " + date + "]"
+	}
+	return "  [expires " + date + "]"
+}
+
+// daysUntil is whole days from today (UTC) until t.
+func daysUntil(t time.Time) int {
+	return int(t.Sub(time.Now().UTC().Truncate(24*time.Hour)).Hours() / 24)
 }

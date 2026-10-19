@@ -111,6 +111,29 @@ func (a *app) recordGroupMeta(name, desc string) error {
 	return a.updateConfig(func(c *vault.Config) { c.RecordGroup(name, desc) })
 }
 
+// expiryNone is the --expires value that clears a recorded deadline.
+const expiryNone = "none"
+
+// setExpiry records an entry's rotation deadline, or clears it for "none". The
+// metadata record must already exist: an expiry describes an entry sanduk
+// knows about, and creating a record here would have to guess its type.
+func (a *app) setExpiry(name, date string) error {
+	if date == expiryNone {
+		date = ""
+	} else if _, err := vault.ParseExpiry(date); err != nil {
+		return err
+	}
+	var recorded bool
+	if err := a.updateConfig(func(c *vault.Config) { recorded = c.SetExpiry(name, date) }); err != nil {
+		return err
+	}
+	if !recorded {
+		return fmt.Errorf("%q has no metadata record to attach an expiry to "+
+			"(fix: sanduk doctor --metadata --fix)", name)
+	}
+	return nil
+}
+
 // refuseOverwrite fails when an entry called name already exists and replace
 // is not set: destructive writes are never the default. Existence is checked by
 // listing names, so no value is decrypted and no Touch ID prompt fires; the

@@ -35,24 +35,45 @@ func parseSelectors(args []string) []selector {
 	return out
 }
 
+// selection is the result of the pipeline: the variables to inject, plus any
+// file secrets the caller must materialize into paths. Both are filtered by
+// --only and --except, which name variables either way.
+type selection struct {
+	env   map[string]string
+	files map[string]vault.FilePayload
+}
+
+// names returns every variable the selection contributes, sorted.
+func (s selection) names() []string {
+	all := make([]string, 0, len(s.env)+len(s.files))
+	for k := range s.env {
+		all = append(all, k)
+	}
+	for k := range s.files {
+		all = append(all, k)
+	}
+	sort.Strings(all)
+	return all
+}
+
 // resolveSelection is the pipeline exec and export share: open the vault, fall
 // back to the approved project file when no selector is given, resolve the
 // selectors left to right, then apply --only and --except. The project file's
 // `only` applies only when --only was not given.
-func (a *app) resolveSelection(sels, only, except []string) (map[string]string, error) {
+func (a *app) resolveSelection(sels, only, except []string) (selection, error) {
 	v, err := a.openVault()
 	if err != nil {
-		return nil, err
+		return selection{}, err
 	}
 	cfg, err := a.loadConfig()
 	if err != nil {
-		return nil, err
+		return selection{}, err
 	}
 
 	if len(sels) == 0 {
 		entry, projOnly, err := a.defaultEntry()
 		if err != nil {
-			return nil, err
+			return selection{}, err
 		}
 		sels = []string{entry}
 		if len(only) == 0 {
@@ -60,70 +81,87 @@ func (a *app) resolveSelection(sels, only, except []string) (map[string]string, 
 		}
 	}
 
-	env, err := resolveSelectors(v, cfg, parseSelectors(sels))
+	sel, err := resolveSelectors(v, cfg, parseSelectors(sels))
 	if err != nil {
-		return nil, err
+		return selection{}, err
 	}
-	env, err = filterOnly(env, only)
+	sel, err = filterOnly(sel, only)
 	if err != nil {
-		return nil, err
+		return selection{}, err
 	}
-	return filterExcept(env, except), nil
+	return filterExcept(sel, except), nil
 }
 
 // resolveSelectors expands selectors left to right and merges the results. A
 // later selector wins when two of them produce the same variable, so a base
-// entry can be overridden by a narrower one.
-func resolveSelectors(v *vault.Vault, cfg *vault.Config, sels []selector) (map[string]string, error) {
-	env := make(map[string]string)
+// entry can be overridden by a narrower one — including across kinds, so a
+// plain variable can override a file secret's path and the reverse.
+func resolveSelectors(v *vault.Vault, cfg *vault.Config, sels []selector) (selection, error) {
+	out := selection{env: map[string]string{}, files: map[string]vault.FilePayload{}}
 	for _, s := range sels {
-		part, err := resolveOne(v, cfg, s)
+		env, files, err := resolveOne(v, cfg, s)
 		if err != nil {
-			return nil, err
+			return selection{}, err
 		}
-		for k, val := range part {
-			env[k] = val
+		for k, val := range env {
+			out.env[k] = val
+			delete(out.files, k)
+		}
+		for k, p := range files {
+			out.files[k] = p
+			delete(out.env, k)
 		}
 	}
-	return env, nil
+	return out, nil
 }
 
-func resolveOne(v *vault.Vault, cfg *vault.Config, s selector) (map[string]string, error) {
+func resolveOne(v *vault.Vault, cfg *vault.Config, s selector) (map[string]string, map[string]vault.FilePayload, error) {
 	if s.env != "" {
 		e, err := v.Get(s.name)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if e.Type != vault.TypeSecret {
-			return nil, fmt.Errorf("%q is a group; ad-hoc binding requires a flat secret", s.name)
+		switch e.Type {
+		case vault.TypeSecret:
+			return map[string]string{s.env: e.Value}, nil, nil
+		case vault.TypeFile:
+			return nil, map[string]vault.FilePayload{
+				s.env: {Filename: e.Filename, Data: e.Data},
+			}, nil
+		default:
+			return nil, nil, fmt.Errorf("%q is a group; ad-hoc binding requires a flat secret or a file secret", s.name)
 		}
-		return map[string]string{s.env: e.Value}, nil
 	}
-	return v.ResolveEnv(s.name, cfg)
+	return v.ResolveEntry(s.name, cfg)
 }
 
 // filterOnly narrows env to the named keys. An unknown key is an error rather
 // than a silent omission: a typo in a least-privilege allowlist should fail
 // loudly instead of quietly running a process without the secret it needs.
-func filterOnly(env map[string]string, only []string) (map[string]string, error) {
+func filterOnly(sel selection, only []string) (selection, error) {
 	keys := splitOnly(only)
 	if len(keys) == 0 {
-		return env, nil
+		return sel, nil
 	}
 
-	out := make(map[string]string, len(keys))
+	out := selection{env: map[string]string{}, files: map[string]vault.FilePayload{}}
 	var missing []string
 	for _, k := range keys {
-		val, ok := env[k]
-		if !ok {
-			missing = append(missing, k)
-			continue
+		switch val, ok := sel.env[k]; {
+		case ok:
+			out.env[k] = val
+		default:
+			p, isFile := sel.files[k]
+			if !isFile {
+				missing = append(missing, k)
+				continue
+			}
+			out.files[k] = p
 		}
-		out[k] = val
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("no such key in the selection: %s (available: %s)",
-			quoteList(missing), quoteList(sortedMapKeys(env)))
+		return selection{}, fmt.Errorf("no such key in the selection: %s (available: %s)",
+			quoteList(missing), quoteList(sel.names()))
 	}
 	return out, nil
 }
@@ -131,21 +169,28 @@ func filterOnly(env map[string]string, only []string) (map[string]string, error)
 // filterExcept removes the named keys from env. Unlike --only, an unknown key is
 // not an error: excluding something that is not present is a harmless no-op,
 // whereas a typo in an allowlist would silently drop a secret that is needed.
-func filterExcept(env map[string]string, except []string) map[string]string {
+func filterExcept(sel selection, except []string) selection {
 	keys := splitOnly(except)
 	if len(keys) == 0 {
-		return env
+		return sel
 	}
 	drop := make(map[string]bool, len(keys))
 	for _, k := range keys {
 		drop[k] = true
 	}
-	out := make(map[string]string, len(env))
-	for k, v := range env {
-		if drop[k] {
-			continue
+	out := selection{
+		env:   make(map[string]string, len(sel.env)),
+		files: make(map[string]vault.FilePayload, len(sel.files)),
+	}
+	for k, v := range sel.env {
+		if !drop[k] {
+			out.env[k] = v
 		}
-		out[k] = v
+	}
+	for k, p := range sel.files {
+		if !drop[k] {
+			out.files[k] = p
+		}
 	}
 	return out
 }

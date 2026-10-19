@@ -151,6 +151,72 @@ Links live in the vault entry, not in `config.toml`, so a group stays
 self-contained in the backend: losing or moving the metadata config can never
 change which variables an entry injects.
 
+### Credential files
+
+Some tools will not take a secret in a variable — they want a path to a file: a
+service-account JSON, an App Store Connect `.p8` key, a client certificate.
+
+```sh
+sanduk add-file gcp --from-file sa.json --as GOOGLE_APPLICATION_CREDENTIALS
+sanduk exec gcp -- gcloud storage ls
+```
+
+The bytes live in the vault like any other secret. What the child gets is a
+path, but **not to a file anyone else can open**: sanduk writes the bytes to a
+temporary file, unlinks it immediately, and hands the child `/dev/fd/N` for the
+descriptor it inherits. The data has no name on disk, and the kernel frees it
+when the child exits.
+
+```sh
+sanduk exec gcp -- sh -c 'cat "$GOOGLE_APPLICATION_CREDENTIALS"'
+# reads /dev/fd/3 — which exists only for that process
+```
+
+For a tool that insists on a real path with an extension, `--materialize DIR`
+writes `0600` files there instead. Those persist: `exec` replaces the sanduk
+process, so there is nobody left to delete them.
+
+`get` describes a file secret — its size and filename — and never prints the
+bytes, whatever flags you pass. To get the contents back out, use
+`sanduk export <name> --materialize DIR`.
+
+> File secrets cannot be the target of `group link`: a link resolves to a value,
+> and a file secret has a path instead. Bind it alongside the group instead —
+> `sanduk exec warden gcp -- ...`.
+
+### Rotation deadlines
+
+Record when a credential should be replaced, and let a check tell you rather
+than remembering:
+
+```sh
+sanduk add stripe --as STRIPE_KEY --expires 2027-04-01
+sanduk rotate stripe --expires 2028-04-01     # move it when you rotate
+sanduk rotate stripe --expires none           # or drop the deadline
+```
+
+`list` marks it, and overdue entries say so rather than printing a date you have
+to compare against today:
+
+```
+NAME     TYPE    ENV / INFO
+stripe   secret  STRIPE_KEY  [expires 2027-04-01]
+legacy   secret  LEGACY_KEY  [EXPIRED 2026-01-09]
+```
+
+`sanduk doctor --expiry` lists them soonest first and exits 3 if anything has
+passed or falls due within `--within` days (default 14), so it drops into CI:
+
+```sh
+sanduk doctor --expiry --within 30
+```
+
+It is metadata only — no value is decrypted — so it is safe to run unattended,
+and it never prompts on a presence-gated backend. A deadline is a reminder, not
+an enforcement: sanduk will not refuse to inject an expired secret, because
+failing a deploy over a date in a config file is worse than the stale key it was
+warning about.
+
 ### Project workflow
 
 Commit a `.sanduk.toml` in the repository root to name the entry the project uses
@@ -230,27 +296,120 @@ sanduk export aws-prod --format json | ./deploy --credentials-from-stdin
 `eval "$(sanduk export …)"` puts the secrets in your shell, where every later
 command can read them; prefer `exec`, which confines them to one process.
 
+### Find copies that have escaped the vault
+
+A secret is only as contained as its worst copy. `scan` looks for your stored
+values where they should never be:
+
+```sh
+sanduk scan                     # the working tree
+sanduk scan --git               # and everything git has ever recorded
+sanduk scan --shell             # and your shell history
+```
+
+```
+ENTRY            LOCATION
+stripe           ./config/settings.py:14
+warden.DB_URL    git history  (run: git log -S <value> to find the commit)
+```
+
+A finding is an entry name and a location — **never the value** — so the output
+is safe to paste into an issue. It exits 3 when anything turns up.
+
+Two things make this unlike every other command. It reads *every* value in the
+vault, because it has to know what to look for, so it asks first and needs
+`--yes` without a terminal; on a presence-gated backend expect a prompt per
+entry. And the values are matched inside sanduk, never handed to `grep` or
+`git grep` as an argument, because argv is readable by every process on the
+machine — searching for a secret that way would leak it.
+
+Dependency and build directories (`node_modules`, `vendor`, `target`, `dist`, …)
+are skipped, binary files are not searched, and values shorter than
+`--min-length` (default 8) are reported as unsearchable rather than matching
+everywhere.
+
+### Import from another credential manager
+
+`import` reads a `.env` file, a CSV export, or a 1Password `.1pux` archive. The
+format comes from the extension and can be forced with `--format`:
+
+```sh
+sanduk import .env.production            # KEY=VALUE pairs
+sanduk import export.csv --dry-run       # names only, nothing written
+sanduk import export.csv
+sanduk import account.1pux --group work
+```
+
+For CSV the header picks the columns: a name column (`name`, `title`, …) and a
+value column (`login_password`, `password`, `credential`, …). A `fields` column
+of `label: value` lines contributes one entry each, which is usually where API
+keys live rather than in the password column.
+
+From a `.1pux` archive only secret-bearing fields are taken: a login's password
+and concealed custom fields. Usernames, URLs, notes and attachments are left
+behind — a credential store should not absorb an address book.
+
+Entry names come from the item title (and field label), upper-cased with other
+characters replaced by underscores, so `Acme API` / `API Key` becomes
+`ACME_API_API_KEY`. Two items that would collide both survive, under distinct
+names.
+
+> An export file is a plaintext copy of another vault. Review it with
+> `--dry-run` first — which prints names and never values — and pass `--delete`
+> to remove it once the import succeeds.
+
+### Give an agent access without giving it secrets
+
+`sanduk mcp` serves entry metadata to a coding agent over the Model Context
+Protocol, on stdin/stdout:
+
+```json
+{ "mcpServers": { "sanduk": { "command": "sanduk", "args": ["mcp"] } } }
+```
+
+Three tools, all read-only: `list_entries`, `describe_entry` and `check_expiry`.
+They return names, kinds, the variables each entry provides, descriptions and
+rotation dates. **None returns a value, and none runs a command.**
+
+The point is what the agent does next. Knowing that `warden` provides `DB_URL`
+and `API_KEY`, it writes an ordinary command:
+
+```sh
+sanduk exec warden --only DB_URL -- psql
+```
+
+That stays subject to whatever approval already governs the agent's shell. An
+execution path inside the server would be a way around it, which is why there
+isn't one — an agent that can already run commands gains nothing from a second
+door, and the user loses the one checkpoint they had.
+
+The server inherits the invocation's backend settings, so point it at the vault
+you want described with `--backend`/`--config` or the `SANDUK_*` variables.
+
 ## Commands
 
 | Command | Description |
 | --- | --- |
-| `sanduk add <name>` | Add/update a flat secret (`--as VAR`, `--from-env VAR`, `--from-file F`, `--description`, `--replace`). |
-| `sanduk add-group <name>` | Create a group (`--from-dotenv F`, `--from-json F\|-`, `--field KEY` prompts, `--description`, `--replace`). |
-| `sanduk group set <name> [KEY…]` | Merge fields into a group (prompt, stdin, `--from-env` reads each KEY from `$KEY`, `--from-dotenv F`, `--description`). |
+| `sanduk add <name>` | Add/update a flat secret (`--as VAR`, `--from-env VAR`, `--from-file F`, `--description`, `--expires`, `--replace`). |
+| `sanduk add-group <name>` | Create a group (`--from-dotenv F`, `--from-json F\|-`, `--field KEY` prompts, `--description`, `--expires`, `--replace`). |
+| `sanduk add-file <name>` | Store a credential file, injected as a path (`--from-file F\|-`, `--as VAR`, `--filename`, `--description`, `--expires`, `--replace`). |
+| `sanduk group set <name> [KEY…]` | Merge fields into a group (prompt, stdin, `--from-env` reads each KEY from `$KEY`, `--from-dotenv F`, `--description`, `--expires`). |
 | `sanduk group unset <name> KEY…` | Remove fields from a group. |
 | `sanduk group link <name> [VAR=]<secret>` | Point a group field at a flat secret instead of copying its value. |
 | `sanduk group unlink <name> KEY…` | Remove a link; the secret it pointed at is untouched. |
 | `sanduk group show <name>` | List a group's field names (never values; `--long` shows which are links). |
 | `sanduk group get <name> KEY` | Inspect one field (redacted unless `--reveal`; terminal-gated, `--force`). |
 | `sanduk get <name>` | Inspect a value, redacted unless `--reveal` (terminal-gated, `--force`; `--field`/`--all` for groups). |
-| `sanduk exec [selector…] -- <cmd>` | Run a command with secrets injected (`--only`, `--except`, `--list`). |
-| `sanduk export [selector…]` | Emit secrets for scripts (`-f shell\|dotenv\|json`, `--only`, `--except`, `-o FILE`, `--force`). |
+| `sanduk exec [selector…] -- <cmd>` | Run a command with secrets injected (`--only`, `--except`, `--list`, `--materialize DIR`). |
+| `sanduk export [selector…]` | Emit secrets for scripts (`-f shell\|dotenv\|json`, `--only`, `--except`, `-o FILE`, `--force`, `--materialize DIR`). |
 | `sanduk list` | List names and metadata (never values; `--json`, `--names`). An entry with no metadata shows as `unknown`. |
-| `sanduk doctor [entry]` | Check a group against `.env.example` (`--template F`); exits 3 on missing keys. `--metadata [--fix]` checks config.toml against the vault; `--links` checks every group link resolves. |
+| `sanduk doctor [entry]` | Check a group against `.env.example` (`--template F`); exits 3 on missing keys. `--metadata [--fix]` checks config.toml against the vault; `--links` checks every group link resolves; `--expiry [--within N]` reports rotation deadlines. |
+| `sanduk scan [path…]` | Search the tree (`--git`, `--shell`) for stored values that escaped the vault; exits 3 on a find. Reads every value, so it needs `--yes` without a terminal. |
+| `sanduk mcp` | Serve entry metadata to an AI agent over MCP — names only, never values, no execution. |
 | `sanduk allow [dir]` | Approve a repository's `.sanduk.toml` for `exec`/`export`/`doctor`. |
 | `sanduk remove <name>` | Delete an entry and its metadata (prompts; `--yes` when non-interactive). |
-| `sanduk rotate <name>` | Replace a flat secret's value (`--from-env VAR`, `--from-file F`, or prompt/stdin). |
-| `sanduk import <file.env>` | Bulk-import a `.env` (`--group NAME`, `--replace` to overwrite existing entries, `--delete`, `--dry-run`). |
+| `sanduk rotate <name>` | Replace a flat secret's value (`--from-env VAR`, `--from-file F`, or prompt/stdin; `--expires` to move the deadline). |
+| `sanduk import <file>` | Bulk-import a `.env`, CSV export or `.1pux` archive (`--format`, `--group NAME`, `--replace`, `--delete`, `--dry-run`). |
 | `sanduk config` | Show the config file and the settings sanduk resolved (`--path`, `--edit` opens `$EDITOR`). |
 | `sanduk completion <shell>` | Print a completion script for bash, zsh, fish or powershell. |
 | `sanduk version` | Print the version (also `--version`). |

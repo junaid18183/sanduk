@@ -3,22 +3,22 @@ package cli
 import "testing"
 
 func TestFilterExcept(t *testing.T) {
-	env := map[string]string{"A": "1", "B": "2", "C": "3"}
+	sel := selection{env: map[string]string{"A": "1", "B": "2", "C": "3"}}
 
-	got := filterExcept(env, []string{"B"})
-	if len(got) != 2 || got["A"] != "1" || got["C"] != "3" {
-		t.Fatalf("filterExcept = %v, want A and C", got)
+	got := filterExcept(sel, []string{"B"})
+	if len(got.env) != 2 || got.env["A"] != "1" || got.env["C"] != "3" {
+		t.Fatalf("filterExcept = %v, want A and C", got.env)
 	}
 
 	// Unlike --only, an unknown exclusion is a harmless no-op.
-	got = filterExcept(env, []string{"NOPE"})
-	if len(got) != 3 {
-		t.Fatalf("filterExcept with an unknown key = %v, want all keys", got)
+	got = filterExcept(sel, []string{"NOPE"})
+	if len(got.env) != 3 {
+		t.Fatalf("filterExcept with an unknown key = %v, want all keys", got.env)
 	}
 
-	got = filterExcept(env, nil)
-	if len(got) != 3 {
-		t.Fatalf("filterExcept(nil) = %v, want all keys", got)
+	got = filterExcept(sel, nil)
+	if len(got.env) != 3 {
+		t.Fatalf("filterExcept(nil) = %v, want all keys", got.env)
 	}
 }
 

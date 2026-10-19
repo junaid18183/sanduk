@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
+	"strings"
 
 	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
@@ -12,11 +14,12 @@ import (
 
 func newExportCmd(a *app) *cobra.Command {
 	var (
-		format string
-		only   []string
-		except []string
-		output string
-		force  bool
+		format      string
+		only        []string
+		except      []string
+		output      string
+		force       bool
+		materialize string
 	)
 
 	cmd := &cobra.Command{
@@ -37,10 +40,17 @@ func newExportCmd(a *app) *cobra.Command {
 			"is given; it never appends. A symlink at that path is replaced by a\n" +
 			"regular file rather than written through. Note that even\n" +
 			"then an exported file is a plaintext copy of the secrets; prefer exec when the\n" +
-			"values only need to reach one process.",
+			"values only need to reach one process.\n\n" +
+			"A file secret has no value to print, only a path, so exporting one requires\n" +
+			"--materialize DIR. Each is written there as a 0600 file and its variable is\n" +
+			"set to that path. Those files are plaintext and are not cleaned up.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, err := a.resolveSelection(args, only, except)
+			sel, err := a.resolveSelection(args, only, except)
+			if err != nil {
+				return err
+			}
+			env, err := a.exportEnv(sel, materialize)
 			if err != nil {
 				return err
 			}
@@ -77,8 +87,53 @@ func newExportCmd(a *app) *cobra.Command {
 		"exclude these keys (comma-separated, repeatable)")
 	cmd.Flags().StringVarP(&output, "output", "o", "",
 		"write to this file (mode 0600) instead of stdout")
+	cmd.Flags().StringVar(&materialize, "materialize", "",
+		"write file secrets as 0600 files in this directory and export their paths")
 	cmd.Flags().BoolVar(&force, "force", false,
 		"replace an existing --output file (a symlink is replaced, not written through)")
 	cmd.ValidArgsFunction = a.completeSelector
 	return cmd
+}
+
+// exportEnv flattens a selection for printing. A file secret has no printable
+// value, so it is refused unless the caller named a directory to write it to.
+func (a *app) exportEnv(sel selection, materialize string) (map[string]string, error) {
+	if len(sel.files) == 0 {
+		if materialize != "" {
+			return nil, fmt.Errorf("--materialize applies to file secrets, and this selection has none")
+		}
+		return sel.env, nil
+	}
+	if materialize == "" {
+		return nil, fmt.Errorf("the selection includes %d file secret(s) (%s), which have a path and no value; "+
+			"pass --materialize DIR to write them out, or --except to drop them",
+			len(sel.files), strings.Join(sortedPayloadKeys(sel.files), ", "))
+	}
+	paths, err := vault.MaterializeInto(materialize, sel.files)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(sel.env)+len(paths))
+	for k, v := range sel.env {
+		out[k] = v
+	}
+	for k, p := range paths {
+		if _, clash := out[k]; clash {
+			return nil, fmt.Errorf("%s is set by both a variable and a file secret", k)
+		}
+		out[k] = p
+	}
+	a.warnf("wrote %d file secret(s) to %s; they are plaintext and are not cleaned up\n",
+		len(paths), materialize)
+	return out, nil
+}
+
+// sortedPayloadKeys names a selection's file secrets, for messages.
+func sortedPayloadKeys(files map[string]vault.FilePayload) []string {
+	names := make([]string, 0, len(files))
+	for k := range files {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
 }

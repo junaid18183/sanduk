@@ -57,6 +57,7 @@ func newAddGroupCmd(a *app) *cobra.Command {
 		fromDotenv string
 		replace    bool
 		descFlag   string
+		expires    string
 	)
 
 	cmd := &cobra.Command{
@@ -104,6 +105,11 @@ func newAddGroupCmd(a *app) *cobra.Command {
 			if len(m) == 0 && len(fieldKeys) == 0 {
 				return fmt.Errorf("no fields provided; use --field KEY, --from-dotenv or --from-json")
 			}
+			if expires != "" && expires != expiryNone {
+				if _, err := vault.ParseExpiry(expires); err != nil {
+					return err
+				}
+			}
 			// Validate every name before prompting for any value.
 			for _, k := range append(sortedMapKeys(m), fieldKeys...) {
 				if err := vault.ValidateEnvName(k); err != nil {
@@ -134,6 +140,11 @@ func newAddGroupCmd(a *app) *cobra.Command {
 			if err := a.recordGroupMeta(name, descFlag); err != nil {
 				return err
 			}
+			if expires != "" {
+				if err := a.setExpiry(name, expires); err != nil {
+					return err
+				}
+			}
 
 			a.warnf("Added group %q with %d field(s)\n", name, len(m))
 			return nil
@@ -144,6 +155,7 @@ func newAddGroupCmd(a *app) *cobra.Command {
 	cmd.Flags().StringVar(&fromJSON, "from-json", "", "read a JSON object of fields from a file, or - for stdin")
 	cmd.Flags().StringVar(&fromDotenv, "from-dotenv", "", "read fields from a .env file")
 	cmd.Flags().StringVar(&descFlag, "description", "", "human-readable description")
+	cmd.Flags().StringVar(&expires, "expires", "", "rotation deadline as YYYY-MM-DD, or \"none\" to clear it")
 	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite an existing entry of any type")
 	cmd.MarkFlagsMutuallyExclusive("from-json", "from-dotenv")
 	return cmd

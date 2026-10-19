@@ -9,6 +9,7 @@ import (
 const (
 	TypeSecret = "secret"
 	TypeGroup  = "group"
+	TypeFile   = "file"
 
 	entryVersion = 1
 )
@@ -28,6 +29,13 @@ type Entry struct {
 	Value   string            `json:"value,omitempty"`
 	Fields  map[string]string `json:"fields,omitempty"`
 	Links   map[string]string `json:"links,omitempty"`
+
+	// Data is a file secret's contents, and Filename the basename it should
+	// be given when materialized (some tools key off the extension). Data is
+	// base64-encoded by encoding/json, so a credential JSON, a .p8 key or a
+	// certificate all round-trip unchanged.
+	Data     []byte `json:"data,omitempty"`
+	Filename string `json:"filename,omitempty"`
 }
 
 func (e *Entry) Marshal() ([]byte, error) {
@@ -60,6 +68,9 @@ func (e *Entry) validate() error {
 		if e.Value == "" {
 			return fmt.Errorf("secret entry has no value")
 		}
+		if len(e.Data) > 0 {
+			return fmt.Errorf("secret entry must not carry file data")
+		}
 		// Only a group composes other entries. A flat secret carrying links
 		// would make the link graph unbounded, which linkTargetType relies on
 		// being one level deep.
@@ -72,6 +83,19 @@ func (e *Entry) validate() error {
 		}
 		if err := validateLinks(e.Fields, e.Links); err != nil {
 			return err
+		}
+		if len(e.Data) > 0 {
+			return fmt.Errorf("group entry must not carry file data")
+		}
+	case TypeFile:
+		if len(e.Data) == 0 {
+			return fmt.Errorf("file entry has no data")
+		}
+		// A file secret is one opaque blob. Letting it also carry fields or
+		// links would give it two resolution paths, and only one of them can
+		// be the variable the child receives.
+		if e.Value != "" || len(e.Fields) > 0 || len(e.Links) > 0 {
+			return fmt.Errorf("file entry must carry only data")
 		}
 	default:
 		return fmt.Errorf("unknown entry type %q", e.Type)

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
@@ -23,6 +24,8 @@ func newDoctorCmd(a *app) *cobra.Command {
 		template string
 		metadata bool
 		links    bool
+		expiry   bool
+		within   int
 		fix      bool
 	)
 
@@ -41,11 +44,24 @@ func newDoctorCmd(a *app) *cobra.Command {
 			"type reads it, which may prompt on some backends.\n\n" +
 			"--links checks every group link: a link whose target was removed, or whose\n" +
 			"target is no longer a flat secret, would fail the next exec. It reads each\n" +
-			"entry, so it may prompt on a presence-gated backend.",
+			"entry, so it may prompt on a presence-gated backend.\n\n" +
+			"--expiry lists the entries carrying a rotation deadline, soonest first, and\n" +
+			"exits 3 if any has passed or falls due within --within days (default 14).\n" +
+			"It reads metadata only: no value is decrypted, so it is safe in CI.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if metadata && links {
-				return fmt.Errorf("--metadata and --links are separate checks; run one at a time")
+			if n := boolCount(metadata, links, expiry); n > 1 {
+				return fmt.Errorf("--metadata, --links and --expiry are separate checks; run one at a time")
+			}
+			if expiry {
+				if len(args) > 0 {
+					return fmt.Errorf("--expiry checks the whole vault; it takes no entry")
+				}
+				if fix {
+					return fmt.Errorf("--fix applies to --metadata; move a deadline with " +
+						"\"sanduk rotate <name> --expires\"")
+				}
+				return a.doctorExpiry(cmd, within)
 			}
 			if metadata {
 				if len(args) > 0 {
@@ -176,6 +192,8 @@ func newDoctorCmd(a *app) *cobra.Command {
 
 	cmd.Flags().BoolVar(&metadata, "metadata", false, "check the metadata config against the vault instead")
 	cmd.Flags().BoolVar(&links, "links", false, "check every group link resolves to a flat secret")
+	cmd.Flags().BoolVar(&expiry, "expiry", false, "report entries whose rotation deadline has passed or is near")
+	cmd.Flags().IntVar(&within, "within", 14, "with --expiry, how many days ahead counts as due")
 	cmd.Flags().BoolVar(&fix, "fix", false, "with --metadata, repair the drift it finds")
 	cmd.Flags().StringVar(&template, "template", "",
 		"template file to compare against (default "+defaultTemplateName+")")
@@ -253,9 +271,12 @@ func (a *app) doctorMetadata(cmd *cobra.Command, fix bool) error {
 			c.Forget(n)
 		}
 		for n, typ := range types {
-			if typ == vault.TypeGroup {
+			switch typ {
+			case vault.TypeGroup:
 				c.RecordGroup(n, "")
-			} else {
+			case vault.TypeFile:
+				c.RecordFile(n, "", "")
+			default:
 				c.RecordSecret(n, "", "")
 			}
 		}
@@ -336,4 +357,64 @@ func (a *app) doctorLinks(cmd *cobra.Command) error {
 		return nil
 	}
 	return &vault.ExitError{Code: exitDrift, Err: fmt.Errorf("%d dangling link(s) of %d", dangling, len(rows))}
+}
+
+// boolCount counts the set flags among several mutually exclusive modes.
+func boolCount(flags ...bool) int {
+	n := 0
+	for _, f := range flags {
+		if f {
+			n++
+		}
+	}
+	return n
+}
+
+// doctorExpiry reports rotation deadlines, soonest first. It reads the metadata
+// config only — never a secret value — so it is safe to run unattended, on a
+// presence-gated backend, and in CI.
+func (a *app) doctorExpiry(cmd *cobra.Command, within int) error {
+	if within < 0 {
+		return fmt.Errorf("--within must not be negative")
+	}
+	cfg, err := a.loadConfig()
+	if err != nil {
+		return err
+	}
+	due, err := cfg.Expiries(time.Now())
+	if err != nil {
+		return err
+	}
+	if len(due) == 0 {
+		a.warnf("no entry carries an expiry date (set one with --expires)\n")
+		return nil
+	}
+
+	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tEXPIRES\tSTATUS")
+	overdue, soon := 0, 0
+	for _, e := range due {
+		var status string
+		switch {
+		case e.Expired():
+			status = fmt.Sprintf("expired %d day(s) ago", -e.Days)
+			overdue++
+		case e.Days <= within:
+			status = fmt.Sprintf("due in %d day(s)", e.Days)
+			soon++
+		default:
+			status = fmt.Sprintf("ok (%d days)", e.Days)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", e.Name, e.Date, status)
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+
+	if overdue+soon == 0 {
+		a.warnf("%d entry/entries with a deadline, none due within %d day(s)\n", len(due), within)
+		return nil
+	}
+	return &vault.ExitError{Code: exitDrift, Err: fmt.Errorf(
+		"%d expired, %d due within %d day(s)", overdue, soon, within)}
 }
