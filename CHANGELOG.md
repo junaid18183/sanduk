@@ -3,6 +3,64 @@
 sanduk is pre-1.0 (`0.0.x`). A release may change behaviour when that closes a
 security hole; each such change is listed under **Breaking**.
 
+## 0.0.6 — 2026-10-19
+
+Five additions, all of which keep the existing rule that a value leaves the
+vault only into the process that needs it.
+
+### Added
+
+- **Rotation deadlines.** `--expires YYYY-MM-DD` on `add`, `add-group`,
+  `add-file`, `group set` and `rotate` records when a credential should be
+  replaced; `--expires none` clears it. `list` marks each entry and says
+  `[EXPIRED …]` once a date has passed. `sanduk doctor --expiry [--within N]`
+  lists deadlines soonest first and exits 3 when any has passed or is due,
+  reading metadata only — no value is decrypted, so it is safe in CI and never
+  prompts on a presence-gated backend. A deadline is advisory: sanduk will not
+  refuse to inject an expired secret.
+- **`sanduk scan` — find copies that escaped the vault.** Searches the working
+  tree, and with `--git` everything git has ever recorded, and with `--shell`
+  your shell history, for stored values. A finding is an entry name and a
+  location, never the value, so the report is safe to paste. Exits 3 on a find.
+  This is the one command that reads every value, so it confirms first and
+  needs `--yes` without a terminal. Values are matched in-process and never
+  handed to `grep`/`git grep` as an argument, where argv would expose them to
+  every process on the machine.
+- **File secrets.** `sanduk add-file <name> --from-file F --as VAR` stores a
+  credential file — a service-account JSON, a `.p8` key, a certificate — and
+  `exec` gives the child a path to it. On Unix the bytes go to a temporary file
+  that is unlinked at once and passed as `/dev/fd/N` for the inherited
+  descriptor, so nothing readable is left on disk and the data is freed when
+  the child exits. `--materialize DIR` writes real files (mode `0600` on Unix)
+  for tools that need a path with an extension; those persist. `export --materialize DIR`
+  writes them out; `get` reports size and filename and never prints the bytes,
+  not even with `--reveal`.
+- **Import from a credential manager.** `import` now reads CSV exports and
+  1Password `.1pux` archives as well as `.env` files, chosen by extension or
+  `--format`. For CSV the header picks the name and value columns, and a
+  `fields` column of `label: value` lines contributes one entry each. From a
+  `.1pux` only secret-bearing fields are taken — a login's password and
+  concealed custom fields — leaving usernames, URLs, notes and attachments
+  behind.
+- **`sanduk mcp` — an agent can see what exists without seeing a secret.** A
+  read-only Model Context Protocol server over stdin/stdout with three tools:
+  `list_entries`, `describe_entry` and `check_expiry`. None returns a value and
+  none runs a command; the agent is told to write `sanduk exec` itself, so the
+  approval that already governs its shell still applies.
+
+### Changed
+
+- `vault.Exec` takes an `ExecOptions` instead of a bare environment map, so it
+  can materialize file secrets. `vault.ResolveEnv` now refuses a file secret
+  and points at `ResolveEntry`, which returns payloads alongside variables.
+- `--only` and `--except` filter file secrets too; both name variables either
+  way.
+- `list` shows `file` as a kind, and `doctor --metadata --fix` records it.
+- `config.toml` gains a `[files]` table and an `expires` key per entry. Both
+  are metadata: no secret value is ever written there.
+- `scan` opens files through an `os.Root` anchored at the scan root, so a
+  symlink cannot walk it out of the tree it was given.
+
 ## 0.0.5 — 2026-10-19
 
 ### Added

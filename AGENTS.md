@@ -21,6 +21,7 @@ cli/                    cobra commands, registered in cli/root.go; thin, no doma
   settings.go           flag > env > config > default resolution; default config and age paths (XDG)
   root.go               Execute and the root command (persistent flags bound to app fields)
   add.go, add_group.go  add a flat secret / create a group
+  add_file.go           store a credential file, injected as a path
   group.go              group set/unset/show/get, the field-level edit path
   group_link.go         group link/unlink: a field that points at a flat secret instead of copying it
   get.go                get (redacted unless --reveal) and the field printer group get shares
@@ -28,8 +29,10 @@ cli/                    cobra commands, registered in cli/root.go; thin, no doma
   selector.go           the selection pipeline exec and export share (selectors, --only, --except)
   project.go            resolves the approved .sanduk.toml into a default entry
   allow.go              approve a repository's .sanduk.toml
-  doctor.go             group vs .env.example, --metadata vault vs config drift, --links dangling links
-  import.go             bulk import from a .env file
+  doctor.go             group vs .env.example, --metadata drift, --links dangling links, --expiry deadlines
+  import.go             bulk import from a .env file, a CSV export or a .1pux archive
+  scan.go               search the tree/git/shell history for values that escaped the vault
+  mcp.go                read-only MCP server: entry metadata for an agent, never a value
   list.go, remove.go, rotate.go, config.go, version.go
   completion.go         entry-name shell completion (opens the vault with a never-prompting passphrase source)
   input.go              terminal input (echo-off prompt, stdin, confirm)
@@ -40,8 +43,8 @@ cli/                    cobra commands, registered in cli/root.go; thin, no doma
 vault/                  all domain logic; no cobra imports here
   vault.go              Vault: Get/Add/List/Remove/ResolveEnv, group field edits, ValidateEntryName
   options.go            Options and Open: everything the vault needs, passed in explicitly
-  entry.go              Secret/Group entry types and validation
-  config.go             metadata config (config.toml), UpdateConfig (locked), MetadataDrift
+  entry.go              Secret/Group/File entry types and validation
+  config.go             metadata config (config.toml), UpdateConfig (locked), MetadataDrift, expiry dates
   project.go            .sanduk.toml discovery and parsing (keeps the parsed bytes' hash)
   project_unix.go       owner/mode checks for project files and private files (no-op on Windows)
   trust.go              the per-user project-approval store (trusted.toml)
@@ -49,6 +52,11 @@ vault/                  all domain logic; no cobra imports here
   backend_age.go        age-encrypted file backend
   backend_biometric_*   macOS Touch ID backend (darwin+cgo) and its stub
   biometric_auth_darwin.{h,m}  shared LAContext, so one command's reads prompt once
+  portable.go           CSV and 1PUX import parsers (name derivation, collision handling)
+  scan.go               the leak scanner: needles in memory, matches carry no value
+  filesecret.go         FilePayload, ExecOptions, MaterializeInto (real 0600 files)
+  filesecret_unix.go    ephemeral materialization: unlinked temp file + /dev/fd/N
+  exec_opts_*.go        per-platform materialize-then-merge for Exec
   exec_unix.go          execve-based secret injection
   exec_windows.go       child-process variant for Windows (returns ExitError)
   exec_env.go           environment merging (strips SANDUK_* from the child)
@@ -250,7 +258,44 @@ Break these and you break the tool's security model:
     are deduplicated per target, which on `keychain-biometric` is one prompt per
     distinct secret; that backend also shares one `LAContext` so a single
     command authenticates once.
-18. **The vault package reads no environment and never prompts.** Paths,
+18. **A file secret is bytes with a path, never a value.** `TypeFile` carries
+    `Data` and a `Filename` hint and nothing else; `validate()` refuses a file
+    entry with a value, fields or links, and refuses `Data` on any other type.
+    `ResolveEnv` cannot return one — it has no value to return — so callers
+    that can materialize use `ResolveEntry`, which yields `FilePayload`s keyed
+    by variable name. On Unix `exec` writes each payload to a temp file,
+    unlinks it immediately and passes `/dev/fd/N` for the inherited
+    descriptor, so nothing readable is left on disk and the data dies with the
+    child; the `*os.File`s must stay alive until `execve` (`runtime.KeepAlive`)
+    or the path stops resolving. `--materialize DIR` is the opt-in escape
+    hatch and its files persist, because execve leaves nobody to delete them.
+    `SafeFilename` strips any directory part: the hint comes out of the vault
+    and must not escape the chosen directory. `get` never prints file bytes,
+    not even with `--reveal`.
+19. **`scan` is the one command that reads the whole vault, and it says so.**
+    It needs that to know what to look for, so it confirms interactively and
+    requires `--yes` without a terminal. A `Match` carries an entry name and a
+    location and **never a value**, so the report is safe to paste. Needles are
+    matched in-process and must never be passed to another program as an
+    argument — argv is world-readable, so shelling out to `grep`/`git grep`
+    with a secret would leak it to every process on the machine. Files are
+    opened through an `os.Root` anchored at the scan root, so a symlink cannot
+    walk the scanner out of the tree it was given.
+20. **An expiry is metadata and advisory.** It lives in config.toml, never in
+    the backend, and `doctor --expiry` reads no values (so it is safe in CI and
+    never prompts on a presence-gated backend). sanduk never refuses to inject
+    an expired secret: failing a deploy over a date in a metadata file is worse
+    than the stale key it warns about. `SetExpiry` only touches an entry that
+    already has a metadata record, because creating one would have to guess the
+    entry's type.
+21. **The MCP server is read-only, value-free and does not execute.** Its tools
+    return names, kinds, variable names, descriptions and dates. Adding a tool
+    that returns a value, or one that runs a command, breaks the whole point:
+    an agent that can already run commands gains nothing from a second
+    execution path, while a server that ran them would bypass the approval the
+    user relies on. The agent is steered to write `sanduk exec` itself. Nothing
+    but protocol messages may go to stdout.
+22. **The vault package reads no environment and never prompts.** Paths,
     backend settings and passphrase sources all arrive in `vault.Options`; the
     CLI owns `SANDUK_*`, XDG and terminal I/O. That keeps the security-relevant
     code deterministic and testable, and means a vault test cannot reach a real

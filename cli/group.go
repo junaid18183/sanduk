@@ -29,6 +29,7 @@ func newGroupSetCmd(a *app) *cobra.Command {
 		fromEnv    bool
 		fromDotenv string
 		descFlag   string
+		expires    string
 	)
 
 	cmd := &cobra.Command{
@@ -116,6 +117,11 @@ func newGroupSetCmd(a *app) *cobra.Command {
 			if err := a.recordGroupMeta(name, descFlag); err != nil {
 				return err
 			}
+			if expires != "" {
+				if err := a.setExpiry(name, expires); err != nil {
+					return err
+				}
+			}
 
 			a.warnf("Updated %d field(s) in group %q\n", len(m), name)
 			return nil
@@ -126,6 +132,7 @@ func newGroupSetCmd(a *app) *cobra.Command {
 		"read each value from the environment variable of the same name")
 	cmd.Flags().StringVar(&fromDotenv, "from-dotenv", "", "merge the fields of a .env file")
 	cmd.Flags().StringVar(&descFlag, "description", "", "set the group's description")
+	cmd.Flags().StringVar(&expires, "expires", "", "rotation deadline as YYYY-MM-DD, or \"none\" to clear it")
 	cmd.MarkFlagsMutuallyExclusive("from-env", "from-dotenv")
 	cmd.ValidArgsFunction = a.completeEntryNames
 	return cmd

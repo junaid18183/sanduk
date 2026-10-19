@@ -56,6 +56,7 @@ func newRootCmd(a *app) *cobra.Command {
 	root.AddCommand(
 		newAddCmd(a),
 		newAddGroupCmd(a),
+		newAddFileCmd(a),
 		newGroupCmd(a),
 		newGetCmd(a),
 		newRemoveCmd(a),
@@ -66,6 +67,8 @@ func newRootCmd(a *app) *cobra.Command {
 		newImportCmd(a),
 		newAllowCmd(a),
 		newDoctorCmd(a),
+		newScanCmd(a),
+		newMCPCmd(a),
 		newConfigCmd(a),
 		newVersionCmd(a),
 	)

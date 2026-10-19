@@ -13,6 +13,7 @@ func newAddCmd(a *app) *cobra.Command {
 		fromFile    string
 		envName     string
 		description string
+		expires     string
 		replace     bool
 	)
 
@@ -64,6 +65,14 @@ func newAddCmd(a *app) *cobra.Command {
 				}
 			}
 
+			// Validate the date before prompting: a typo should not cost the
+			// user an echo-off paste.
+			if expires != "" && expires != expiryNone {
+				if _, err := vault.ParseExpiry(expires); err != nil {
+					return err
+				}
+			}
+
 			value, err := readSecret(fromEnv, fromFile, true)
 			if err != nil {
 				return err
@@ -75,6 +84,11 @@ func newAddCmd(a *app) *cobra.Command {
 			if err := a.recordSecretMeta(name, envName, description); err != nil {
 				return err
 			}
+			if expires != "" {
+				if err := a.setExpiry(name, expires); err != nil {
+					return err
+				}
+			}
 
 			a.warnf("Added secret %q\n", name)
 			return nil
@@ -85,6 +99,7 @@ func newAddCmd(a *app) *cobra.Command {
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "read the value from this file")
 	cmd.Flags().StringVar(&envName, "as", "", "environment variable to expose the secret as")
 	cmd.Flags().StringVar(&description, "description", "", "human-readable description")
+	cmd.Flags().StringVar(&expires, "expires", "", "rotation deadline as YYYY-MM-DD, or \"none\" to clear it")
 	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite an existing entry that is not a flat secret (e.g. a group)")
 	cmd.MarkFlagsMutuallyExclusive("from-env", "from-file")
 	return cmd

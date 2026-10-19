@@ -54,7 +54,8 @@ func newRemoveCmd(a *app) *cobra.Command {
 			if err := a.updateConfig(func(c *vault.Config) {
 				_, s := c.Secrets[name]
 				_, g := c.Groups[name]
-				hadMeta = s || g
+				_, f := c.Files[name]
+				hadMeta = s || g || f
 				c.Forget(name)
 			}); err != nil {
 				a.warnf("warning: removed %q but could not update the config: %v\n", name, err)

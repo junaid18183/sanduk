@@ -71,27 +71,27 @@ func TestSplitOnly(t *testing.T) {
 }
 
 func TestFilterOnly(t *testing.T) {
-	env := map[string]string{"A": "1", "B": "2", "C": "3"}
+	sel := selection{env: map[string]string{"A": "1", "B": "2", "C": "3"}}
 
 	// No allowlist leaves the environment untouched.
-	got, err := filterOnly(env, nil)
+	got, err := filterOnly(sel, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("filtered = %v, want all keys", got)
+	if len(got.env) != 3 {
+		t.Fatalf("filtered = %v, want all keys", got.env)
 	}
 
-	got, err = filterOnly(env, []string{"A,C"})
+	got, err = filterOnly(sel, []string{"A,C"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got["A"] != "1" || got["C"] != "3" {
-		t.Fatalf("filtered = %v, want A and C", got)
+	if len(got.env) != 2 || got.env["A"] != "1" || got.env["C"] != "3" {
+		t.Fatalf("filtered = %v, want A and C", got.env)
 	}
 
 	// A typo must fail rather than silently injecting nothing.
-	if _, err := filterOnly(env, []string{"A,NOPE"}); err == nil {
+	if _, err := filterOnly(sel, []string{"A,NOPE"}); err == nil {
 		t.Fatal("expected an error for an unknown key")
 	}
 }
@@ -107,10 +107,11 @@ func TestResolveSelectorsMergesLeftToRight(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env, err := resolveSelectors(v, cfg, parseSelectors([]string{"warden", "DB_URL=db-alt"}))
+	sel, err := resolveSelectors(v, cfg, parseSelectors([]string{"warden", "DB_URL=db-alt"}))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
+	env := sel.env
 	if env["DB_URL"] != "flat-value" {
 		t.Fatalf("DB_URL = %q, want the later selector to win", env["DB_URL"])
 	}
@@ -118,10 +119,11 @@ func TestResolveSelectorsMergesLeftToRight(t *testing.T) {
 		t.Fatalf("API_KEY = %q, want the group's other field", env["API_KEY"])
 	}
 
-	env, err = resolveSelectors(v, cfg, parseSelectors([]string{"DB_URL=db-alt", "warden"}))
+	sel, err = resolveSelectors(v, cfg, parseSelectors([]string{"DB_URL=db-alt", "warden"}))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
+	env = sel.env
 	if env["DB_URL"] != "group-value" {
 		t.Fatalf("DB_URL = %q, want the group to win when it comes last", env["DB_URL"])
 	}

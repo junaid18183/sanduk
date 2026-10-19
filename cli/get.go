@@ -79,6 +79,20 @@ func newGetCmd(a *app) *cobra.Command {
 				enc.SetIndent("", "  ")
 				return enc.Encode(fields)
 
+			case vault.TypeFile:
+				if field != "" || all {
+					return fmt.Errorf("%q is a file secret; --field and --all apply to groups", args[0])
+				}
+				// File secrets are opaque bytes, often binary. Printing them
+				// to a terminal is never what anyone wants, and get is the
+				// terminal-facing command; export --materialize writes them out.
+				name := vault.SafeFilename(args[0], vault.FilePayload{Filename: e.Filename})
+				fmt.Fprintf(out, "file secret: %d bytes, materialized as %q\n", len(e.Data), name)
+				if reveal {
+					a.warnf("--reveal does not dump file bytes; use \"sanduk export %s --materialize DIR\"\n", args[0])
+				}
+				return nil
+
 			default:
 				return fmt.Errorf("unknown entry type %q", e.Type)
 			}

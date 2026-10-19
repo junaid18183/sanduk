@@ -10,9 +10,10 @@ import (
 
 func newExecCmd(a *app) *cobra.Command {
 	var (
-		only   []string
-		except []string
-		list   bool
+		only        []string
+		except      []string
+		list        bool
+		materialize string
 	)
 
 	cmd := &cobra.Command{
@@ -33,6 +34,11 @@ func newExecCmd(a *app) *cobra.Command {
 			"  sanduk exec -- pnpm dev                     # entry from " + vault.ProjectFileName + "\n\n" +
 			"--list prints the variable names that would be injected, never their values,\n" +
 			"and runs nothing.\n\n" +
+			"A file secret is injected as a path. By default its bytes go to a temporary\n" +
+			"file that is unlinked at once and handed to the child as /dev/fd/N, so\n" +
+			"nothing readable is left on disk and the data is freed when the child exits.\n" +
+			"Use --materialize DIR for a tool that insists on a real path; those files\n" +
+			"persist, because exec replaces this process and leaves nobody to delete them.\n\n" +
 			"Without `--`, a single selector is accepted, then the command.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -42,20 +48,29 @@ func newExecCmd(a *app) *cobra.Command {
 			}
 
 			// No selector means "the repository's default entry".
-			env, err := a.resolveSelection(sels, only, except)
+			sel, err := a.resolveSelection(sels, only, except)
 			if err != nil {
 				return err
 			}
 
 			if list {
-				for _, k := range sortedMapKeys(env) {
+				for _, k := range sel.names() {
 					fmt.Fprintln(cmd.OutOrStdout(), k)
 				}
-				a.warnf("%d variable(s) would be injected; nothing was run\n", len(env))
+				a.warnf("%d variable(s) would be injected; nothing was run\n", len(sel.names()))
 				return nil
 			}
 
-			if err := vault.Exec(command[0], command[1:], env); err != nil {
+			if materialize != "" && len(sel.files) == 0 {
+				return fmt.Errorf("--materialize applies to file secrets, and this selection has none")
+			}
+			if len(sel.files) > 0 && materialize != "" {
+				a.warnf("writing %d file secret(s) to %s; they outlive the command, so remove them when done\n",
+					len(sel.files), materialize)
+			}
+
+			opts := vault.ExecOptions{Env: sel.env, Files: sel.files, MaterializeDir: materialize}
+			if err := vault.Exec(command[0], command[1:], opts); err != nil {
 				if strings.Contains(command[0], "=") {
 					return fmt.Errorf("%w (hint: selectors go before `--`; %q looks like an ENVVAR=entry binding)",
 						err, command[0])
@@ -72,6 +87,8 @@ func newExecCmd(a *app) *cobra.Command {
 		"exclude these keys (comma-separated, repeatable)")
 	cmd.Flags().BoolVar(&list, "list", false,
 		"print the variable names that would be injected, without running anything")
+	cmd.Flags().StringVar(&materialize, "materialize", "",
+		"write file secrets as real files in this directory (0600 on Unix) instead of /dev/fd")
 	cmd.ValidArgsFunction = a.completeSelector
 	return cmd
 }
