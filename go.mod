@@ -1,6 +1,6 @@
 module github.com/junaid18183/sanduk
 
-go 1.26.0
+go 1.26.3
 
 require (
 	filippo.io/age v1.3.2

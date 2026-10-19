@@ -81,6 +81,10 @@ security hole; each such change is listed under **Breaking**.
 
 ### Dependencies
 
+- Require Go 1.26.3, the first patch without GO-2026-4971 (a `net` panic on
+  Windows reachable through the keyring library). CI builds and tests with the
+  newest 1.26 patch so later stdlib fixes land without a go.mod change.
+
 - `jose2go` 1.5.0 → 1.11.0 (GO-2023-2409; reachable only through the keyring
   library's file backend, which sanduk never selects), `wincred` 1.2.3,
   `pflag` 1.0.10, `x/crypto` 0.57.0.

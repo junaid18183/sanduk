@@ -1,0 +1,4 @@
+# Go tooling (gofmt, go mod tidy) assumes LF. Without this, a Windows checkout
+# converts every file to CRLF and `gofmt -l .` then reports the whole tree as
+# unformatted, which is what broke the Windows CI job.
+* text=auto eol=lf

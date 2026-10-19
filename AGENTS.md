@@ -260,7 +260,12 @@ Break these and you break the tool's security model:
   CHANGELOG under Breaking.
 - CI pins every action to a commit SHA and every tool to a version (see the
   `env:` block in ci.yml). When bumping one, pick a release at least two weeks
-  old; Dependabot enforces the same cooldown.
+  old; Dependabot enforces the same cooldown. The Go toolchain is the exception:
+  `GO_VERSION: "1.26.x"` tracks the newest patch of the supported line, so a
+  stdlib security fix (which govulncheck fails on) does not need a go.mod bump.
+  `gofmt` and `go mod tidy` are platform-independent and run only in the lint
+  job; `.gitattributes` forces LF checkouts, without which gofmt reports every
+  file on Windows.
 
 ## Adding a command
 
