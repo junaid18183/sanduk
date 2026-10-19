@@ -3,7 +3,10 @@
 sanduk is pre-1.0 (`0.0.x`). A release may change behaviour when that closes a
 security hole; each such change is listed under **Breaking**.
 
-## Unreleased
+## 0.0.4 — 2026-10-19
+
+The first release after a full security, architecture and documentation audit.
+Several changes are breaking; sanduk is pre-1.0 and fails closed by preference.
 
 ### Security
 
