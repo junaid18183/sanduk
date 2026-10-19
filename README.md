@@ -540,6 +540,23 @@ only, and are resolved last:
 backend  = "keychain"   # or secret-service, wincred, pass, file/age, ...
 keychain = "sanduk"     # macOS: a dedicated keychain (opt in deliberately)
 service  = "sanduk"     # namespace; also names the age vault file
+
+# Entry metadata, written by sanduk: which variable each secret becomes, what
+# it is for, and when it should be rotated. Values live in the keystore and
+# never appear here.
+[secrets]
+  [secrets.stripe]
+    env = "STRIPE_KEY"
+    description = "billing"
+    expires = "2027-04-01"
+
+[groups]
+  [groups.warden]
+    description = "the warden service"
+
+[files]
+  [files.gcp]
+    env = "GOOGLE_APPLICATION_CREDENTIALS"
 ```
 
 `backend` is machine-specific — a config that says `"keychain"` fails on Linux —
@@ -576,10 +593,12 @@ make a static API key short-lived: there is no token exchange for one, so a
 leaked key stays valid until you rotate it.
 
 **Trust boundaries.** The keystore holds the values. config.toml and
-trusted.toml hold names and hashes only, and are written with mode 0600.
-`.sanduk.toml` comes from the repository and is untrusted until you approve its
-exact contents. Your shell's environment is outside the boundary: `export` and
-direnv put secrets there; `exec` does not.
+trusted.toml hold names, variable mappings, descriptions, rotation dates and
+hashes — never a value — and are written with mode 0600. `.sanduk.toml` comes
+from the repository and is untrusted until you approve its exact contents. Your
+shell's environment is outside the boundary: `export` and direnv put secrets
+there; `exec` does not. Plaintext reaches disk only where you ask for it:
+`export --output`, and `--materialize DIR` for file secrets.
 
 ### Security notes
 
@@ -613,10 +632,34 @@ direnv put secrets there; `exec` does not.
   the project or that group/other users can access.
 - With no backend set, sanduk uses exactly one platform keystore and treats a
   failure to open it as an error, so secrets never end up split across stores.
+- A **file secret** never becomes a file anyone else can open. `exec` writes the
+  bytes to a temporary file, unlinks it immediately, and passes the child
+  `/dev/fd/N` for the descriptor it inherits, so the data has no name on disk
+  and is freed when the child exits. `exec --materialize DIR` and
+  `export --materialize DIR` are the deliberate exceptions: they write real
+  `0600` files, and those persist until you delete them. `get` never prints file
+  bytes, whatever flags you pass.
+- **`sanduk scan` is the one command that reads every value**, because it cannot
+  search for secrets it has not loaded. It says so and asks before doing it, and
+  refuses without `--yes` when there is no terminal; on `keychain-biometric`
+  expect a prompt per entry. Its findings name an entry and a location and never
+  a value, so the report is safe to paste. The values it searches for stay in
+  this process — they are never passed to `grep` or `git grep` as arguments,
+  where every process on the machine could read them out of `ps`.
+- **Rotation deadlines are advisory.** `--expires` is metadata, and sanduk will
+  not refuse to inject an expired secret — failing a deploy over a date in a
+  config file is worse than the stale key it warns about. `doctor --expiry`
+  reads no values, so it is safe to run unattended and in CI.
+- An **export file from another credential manager** (`.csv`, `.1pux`) is a
+  plaintext copy of that whole vault. Review it with `import --dry-run`, which
+  prints names only, and pass `--delete` to remove it once the import succeeds.
 - A process running as *you* with shell access can still run `sanduk`. Pair this
   with your agent's own command-permission rules, and use the experimental
   `keychain-biometric` backend so reading a secret requires Touch ID, which a
-  headless agent cannot satisfy.
+  headless agent cannot satisfy. `sanduk mcp` is the other half of that: it lets
+  an agent discover what credentials exist — names, kinds and variable names —
+  without being shown a value, and without giving it a way to run commands that
+  bypasses your approval.
 
 Report a vulnerability privately — see [SECURITY.md](SECURITY.md).
 
