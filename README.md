@@ -5,6 +5,8 @@ other development secrets. It stores secrets in your operating system's secure
 keystore and exposes them to the processes that need them — on demand, without
 writing plaintext secrets to disk.
 
+![sanduk storing a key, injecting it into one process, linking it into a group, and finding a leaked copy](docs/demo.gif)
+
 ## Why
 
 Secrets in a plaintext `.env` are readable by everything that can read files,
@@ -89,29 +91,29 @@ instead of storing a second copy:
 
 ```sh
 # the shared secret, stored once
-sanduk add elevenlabs --as ELEVENLABS_API_KEY
+sanduk add openai --as OPENAI_API_KEY
 
 # point a project group at it — nothing is copied
-sanduk group link maktub elevenlabs
-# Linked ELEVENLABS_API_KEY in group "maktub" -> secret "elevenlabs"
+sanduk group link warden openai
+# Linked OPENAI_API_KEY in group "warden" -> secret "openai"
 
 # or bind it under a different variable name in this group
-sanduk group link maktub XI_KEY=elevenlabs
+sanduk group link warden LLM_KEY=openai
 ```
 
 A bare secret name uses the variable that secret is already exposed as — its
-`--as` mapping, the same name `sanduk export elevenlabs` prints — so the common
+`--as` mapping, the same name `sanduk export openai` prints — so the common
 case takes no second argument.
 
-Nothing is read into the group: the link stores the *name* `elevenlabs`, and the
+Nothing is read into the group: the link stores the *name* `openai`, and the
 value is fetched when the group is resolved. So a rotation needs no re-sync:
 
 ```sh
-sanduk rotate elevenlabs
+sanduk rotate openai
 
-sanduk export maktub --format dotenv
-# ELEVENLABS_API_KEY=<the new value>
-# MAKTUB_DB_URL=postgres://…
+sanduk export warden --format dotenv
+# OPENAI_API_KEY=<the new value>
+# DB_URL=postgres://…
 ```
 
 `group show` lists a linked field like any other, because a consumer of that list
@@ -119,23 +121,23 @@ cares which variables the group contributes, not where each value is kept. Pass
 `--long` to see the difference:
 
 ```sh
-sanduk group show maktub --long
+sanduk group show warden --long
 # KEY                   SOURCE
-# ELEVENLABS_API_KEY    -> elevenlabs
-# MAKTUB_DB_URL         stored
+# OPENAI_API_KEY    -> openai
+# DB_URL         stored
 ```
 
 Deleting the target does not corrupt the group, but it fails loudly at use
 rather than quietly injecting nothing:
 
 ```sh
-sanduk remove elevenlabs --yes
-sanduk exec maktub -- ./server
-# sanduk: group "maktub": field ELEVENLABS_API_KEY links to "elevenlabs", which is not in the vault
+sanduk remove openai --yes
+sanduk exec warden -- ./server
+# sanduk: group "warden": field OPENAI_API_KEY links to "openai", which is not in the vault
 ```
 
 `sanduk doctor --links` finds that before a deploy does, and exits 3 if any link
-dangles. `sanduk group unlink maktub ELEVENLABS_API_KEY` drops the pointer and
+dangles. `sanduk group unlink warden OPENAI_API_KEY` drops the pointer and
 leaves the secret itself untouched.
 
 Two rules keep links predictable:

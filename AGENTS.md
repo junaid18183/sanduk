@@ -67,6 +67,8 @@ vault/                  all domain logic; no cobra imports here
   filelock_*.go         cross-process lock: flock on Unix, LockFileEx on Windows
   exit.go               ExitError, so library code never calls os.Exit
   testing.go            UseFastScryptForTests (panics outside go test)
+docs/                   demo.sh records demo.cast/demo.gif (the README demo) against a temp age
+                        vault; re-run it after changing the commands it shows
 .github/                ci.yml (checks; reusable), release.yml (CI, then GoReleaser), dependabot.yml
 .golangci.yml           linter configuration
 .goreleaser.yml         release configuration (trimpath, cosign signing, SBOMs)
