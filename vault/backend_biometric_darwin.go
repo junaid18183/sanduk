@@ -12,11 +12,19 @@
 package vault
 
 /*
-#cgo LDFLAGS: -framework Security -framework CoreFoundation
+#cgo LDFLAGS: -framework Security -framework CoreFoundation -framework LocalAuthentication
 #include <stdlib.h>
 #include <string.h>
 #include <Security/Security.h>
 #include <CoreFoundation/CoreFoundation.h>
+
+#include "biometric_auth_darwin.h"
+
+// authReuseSeconds is how long one successful Touch ID may cover further reads.
+// It is deliberately short: long enough for a single command to resolve a group
+// and the secrets it links, far too short to leave the vault unlocked behind
+// the user.
+#define SANDUK_AUTH_REUSE_SECONDS 10.0
 
 // sanduk_cfstring_to_cstr returns a malloc'd UTF-8 copy of s, or NULL.
 static char *sanduk_cfstring_to_cstr(CFStringRef s) {
@@ -181,6 +189,14 @@ static int sanduk_get(const char *service, const char *account,
 	}
 	CFDictionaryAddValue(q, kSecReturnData, kCFBooleanTrue);
 	CFDictionaryAddValue(q, kSecMatchLimit, kSecMatchLimitOne);
+
+	// Reuse one authentication across the reads of a single command, so
+	// resolving a group with links prompts once rather than once per secret.
+	// Without a context each read authenticates separately, which still works.
+	void *actx = sanduk_auth_context(SANDUK_AUTH_REUSE_SECONDS);
+	if (actx != NULL) {
+		CFDictionaryAddValue(q, kSecUseAuthenticationContext, (CFTypeRef)actx);
+	}
 
 	CFTypeRef result = NULL;
 	OSStatus st = SecItemCopyMatching(q, &result);

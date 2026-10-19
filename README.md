@@ -82,6 +82,75 @@ it *before* sanduk runs — and it is not set in your shell, which is the point.
 The secrets exist only inside the child process — they are never exported into
 your shell, so they are not inherited by anything else you launch from it.
 
+### Share one secret across groups
+
+A key you use in several projects should live in one place. Link it into a group
+instead of storing a second copy:
+
+```sh
+# the shared secret, stored once
+sanduk add elevenlabs --as ELEVENLABS_API_KEY
+
+# point a project group at it — nothing is copied
+sanduk group link maktub elevenlabs
+# Linked ELEVENLABS_API_KEY in group "maktub" -> secret "elevenlabs"
+
+# or bind it under a different variable name in this group
+sanduk group link maktub XI_KEY=elevenlabs
+```
+
+A bare secret name uses the variable that secret is already exposed as — its
+`--as` mapping, the same name `sanduk export elevenlabs` prints — so the common
+case takes no second argument.
+
+Nothing is read into the group: the link stores the *name* `elevenlabs`, and the
+value is fetched when the group is resolved. So a rotation needs no re-sync:
+
+```sh
+sanduk rotate elevenlabs
+
+sanduk export maktub --format dotenv
+# ELEVENLABS_API_KEY=<the new value>
+# MAKTUB_DB_URL=postgres://…
+```
+
+`group show` lists a linked field like any other, because a consumer of that list
+cares which variables the group contributes, not where each value is kept. Pass
+`--long` to see the difference:
+
+```sh
+sanduk group show maktub --long
+# KEY                   SOURCE
+# ELEVENLABS_API_KEY    -> elevenlabs
+# MAKTUB_DB_URL         stored
+```
+
+Deleting the target does not corrupt the group, but it fails loudly at use
+rather than quietly injecting nothing:
+
+```sh
+sanduk remove elevenlabs --yes
+sanduk exec maktub -- ./server
+# sanduk: group "maktub": field ELEVENLABS_API_KEY links to "elevenlabs", which is not in the vault
+```
+
+`sanduk doctor --links` finds that before a deploy does, and exits 3 if any link
+dangles. `sanduk group unlink maktub ELEVENLABS_API_KEY` drops the pointer and
+leaves the secret itself untouched.
+
+Two rules keep links predictable:
+
+- **A link may only point at a flat secret.** That makes a cycle impossible by
+  construction rather than by a depth limit, and keeps resolution to one extra
+  read per distinct target.
+- **A variable is either stored in the group or linked, never both.** There is no
+  precedence rule to remember; `group link` refuses a name the group already
+  stores, and tells you to `group unset` it first or link under another name.
+
+Links live in the vault entry, not in `config.toml`, so a group stays
+self-contained in the backend: losing or moving the metadata config can never
+change which variables an entry injects.
+
 ### Project workflow
 
 Commit a `.sanduk.toml` in the repository root to name the entry the project uses
@@ -169,13 +238,15 @@ command can read them; prefer `exec`, which confines them to one process.
 | `sanduk add-group <name>` | Create a group (`--from-dotenv F`, `--from-json F\|-`, `--field KEY` prompts, `--description`, `--replace`). |
 | `sanduk group set <name> [KEY…]` | Merge fields into a group (prompt, stdin, `--from-env` reads each KEY from `$KEY`, `--from-dotenv F`, `--description`). |
 | `sanduk group unset <name> KEY…` | Remove fields from a group. |
-| `sanduk group show <name>` | List a group's field names (never values). |
+| `sanduk group link <name> [VAR=]<secret>` | Point a group field at a flat secret instead of copying its value. |
+| `sanduk group unlink <name> KEY…` | Remove a link; the secret it pointed at is untouched. |
+| `sanduk group show <name>` | List a group's field names (never values; `--long` shows which are links). |
 | `sanduk group get <name> KEY` | Inspect one field (redacted unless `--reveal`; terminal-gated, `--force`). |
 | `sanduk get <name>` | Inspect a value, redacted unless `--reveal` (terminal-gated, `--force`; `--field`/`--all` for groups). |
 | `sanduk exec [selector…] -- <cmd>` | Run a command with secrets injected (`--only`, `--except`, `--list`). |
 | `sanduk export [selector…]` | Emit secrets for scripts (`-f shell\|dotenv\|json`, `--only`, `--except`, `-o FILE`, `--force`). |
 | `sanduk list` | List names and metadata (never values; `--json`, `--names`). An entry with no metadata shows as `unknown`. |
-| `sanduk doctor [entry]` | Check a group against `.env.example` (`--template F`); exits 3 on missing keys. `--metadata [--fix]` checks config.toml against the vault. |
+| `sanduk doctor [entry]` | Check a group against `.env.example` (`--template F`); exits 3 on missing keys. `--metadata [--fix]` checks config.toml against the vault; `--links` checks every group link resolves. |
 | `sanduk allow [dir]` | Approve a repository's `.sanduk.toml` for `exec`/`export`/`doctor`. |
 | `sanduk remove <name>` | Delete an entry and its metadata (prompts; `--yes` when non-interactive). |
 | `sanduk rotate <name>` | Replace a flat secret's value (`--from-env VAR`, `--from-file F`, or prompt/stdin). |
@@ -257,6 +328,11 @@ Two caveats:
   disabled, selecting this backend returns an error.
 - It uses a separate namespace (`sanduk-biometric`), so items you stored with
   the standard `keychain` backend will not appear. Re-add them to use it.
+
+Reads within one command share a single `LAContext` with a 10-second reuse
+window, so resolving a group and the secrets it links prompts once rather than
+once per read. The window is per process: it dies with the command that opened
+it, and never carries over to the next invocation.
 
 #### Using a dedicated keychain
 

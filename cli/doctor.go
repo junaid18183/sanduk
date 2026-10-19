@@ -22,6 +22,7 @@ func newDoctorCmd(a *app) *cobra.Command {
 	var (
 		template string
 		metadata bool
+		links    bool
 		fix      bool
 	)
 
@@ -37,14 +38,30 @@ func newDoctorCmd(a *app) *cobra.Command {
 			"--metadata instead compares the vault with the metadata config: entries\n" +
 			"with no metadata (list cannot tell their type) and metadata for entries\n" +
 			"that no longer exist. --fix repairs both; recording an untracked entry's\n" +
-			"type reads it, which may prompt on some backends.",
+			"type reads it, which may prompt on some backends.\n\n" +
+			"--links checks every group link: a link whose target was removed, or whose\n" +
+			"target is no longer a flat secret, would fail the next exec. It reads each\n" +
+			"entry, so it may prompt on a presence-gated backend.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if metadata && links {
+				return fmt.Errorf("--metadata and --links are separate checks; run one at a time")
+			}
 			if metadata {
 				if len(args) > 0 {
 					return fmt.Errorf("--metadata checks the whole vault; it takes no entry")
 				}
 				return a.doctorMetadata(cmd, fix)
+			}
+			if links {
+				if len(args) > 0 {
+					return fmt.Errorf("--links checks the whole vault; it takes no entry")
+				}
+				if fix {
+					return fmt.Errorf("--fix applies to --metadata; a dangling link is repaired with " +
+						"\"sanduk group link\" or \"sanduk group unlink\"")
+				}
+				return a.doctorLinks(cmd)
 			}
 			if fix {
 				return fmt.Errorf("--fix applies to --metadata")
@@ -103,7 +120,16 @@ func newDoctorCmd(a *app) *cobra.Command {
 				return fmt.Errorf("%q is a flat secret; doctor compares groups against a template", entry)
 			}
 
-			missing, extra := diffKeys(e.Fields, tmpl)
+			// A linked field is as present as a stored one; comparing only
+			// e.Fields would report every link as missing.
+			present := make(map[string]string, len(e.Fields)+len(e.Links))
+			for k, val := range e.Fields {
+				present[k] = val
+			}
+			for k, target := range e.Links {
+				present[k] = target
+			}
+			missing, extra := diffKeys(present, tmpl)
 			isMissing := make(map[string]bool, len(missing))
 			for _, k := range missing {
 				isMissing[k] = true
@@ -149,6 +175,7 @@ func newDoctorCmd(a *app) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&metadata, "metadata", false, "check the metadata config against the vault instead")
+	cmd.Flags().BoolVar(&links, "links", false, "check every group link resolves to a flat secret")
 	cmd.Flags().BoolVar(&fix, "fix", false, "with --metadata, repair the drift it finds")
 	cmd.Flags().StringVar(&template, "template", "",
 		"template file to compare against (default "+defaultTemplateName+")")
@@ -237,4 +264,76 @@ func (a *app) doctorMetadata(cmd *cobra.Command, fix bool) error {
 	}
 	a.warnf("fixed: recorded %d entry/entries, removed %d stale record(s)\n", len(untracked), len(orphaned))
 	return nil
+}
+
+// doctorLinks reports group links whose target has been removed or is no longer
+// a flat secret. Such a link fails closed at resolve time; this finds it before
+// a deploy does.
+func (a *app) doctorLinks(cmd *cobra.Command) error {
+	v, err := a.openVault()
+	if err != nil {
+		return err
+	}
+	names, err := v.List()
+	if err != nil {
+		return err
+	}
+
+	// Entry types are read once, not once per link, so a group linking the same
+	// secret twice costs one read.
+	types := make(map[string]string, len(names))
+	for _, n := range names {
+		e, err := v.Get(n)
+		if err != nil {
+			return err
+		}
+		types[n] = e.Type
+	}
+
+	type linkRef struct{ group, key, target, status string }
+	var rows []linkRef
+	dangling := 0
+	for _, n := range names {
+		if types[n] != vault.TypeGroup {
+			continue
+		}
+		e, err := v.Get(n)
+		if err != nil {
+			return err
+		}
+		for _, k := range sortedMapKeys(e.Links) {
+			target := e.Links[k]
+			status := "ok"
+			switch typ, ok := types[target]; {
+			case !ok:
+				status = "missing"
+			case typ != vault.TypeSecret:
+				status = "not a flat secret"
+			}
+			if status != "ok" {
+				dangling++
+			}
+			rows = append(rows, linkRef{group: n, key: k, target: target, status: status})
+		}
+	}
+
+	if len(rows) == 0 {
+		a.warnf("no group links to check\n")
+		return nil
+	}
+
+	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
+	fmt.Fprintln(tw, "GROUP\tKEY\tTARGET\tSTATUS")
+	for _, r := range rows {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.group, r.key, r.target, r.status)
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+
+	if dangling == 0 {
+		a.warnf("%d link(s) resolve\n", len(rows))
+		return nil
+	}
+	return &vault.ExitError{Code: exitDrift, Err: fmt.Errorf("%d dangling link(s) of %d", dangling, len(rows))}
 }

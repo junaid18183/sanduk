@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
@@ -18,7 +19,8 @@ func newGroupCmd(a *app) *cobra.Command {
 			"is an environment variable name. Use add-group to create one, and these\n" +
 			"subcommands to edit it a field at a time.",
 	}
-	cmd.AddCommand(newGroupSetCmd(a), newGroupUnsetCmd(a), newGroupShowCmd(a), newGroupGetCmd(a))
+	cmd.AddCommand(newGroupSetCmd(a), newGroupUnsetCmd(a), newGroupShowCmd(a), newGroupGetCmd(a),
+		newGroupLinkCmd(a), newGroupUnlinkCmd(a))
 	return cmd
 }
 
@@ -202,11 +204,17 @@ func newGroupUnsetCmd(a *app) *cobra.Command {
 }
 
 func newGroupShowCmd(a *app) *cobra.Command {
+	var long bool
+
 	cmd := &cobra.Command{
 		Use:   "show <group>",
 		Short: "List a group's field names (never its values)",
 		Long: "Print one field name per line, so the output composes with grep, xargs and\n" +
-			"--only. Values are never printed; use \"sanduk group get\" for one value.",
+			"--only. Linked fields are listed like any other: a consumer of the list\n" +
+			"cares which variables the group contributes, not where each value is kept.\n" +
+			"Values are never printed; use \"sanduk group get\" for one value.\n\n" +
+			"--long adds a table showing which fields are links and what they point at.\n" +
+			"It is a separate flag so the default output stays safe to pipe.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			v, err := a.openVault()
@@ -217,14 +225,32 @@ func newGroupShowCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			for _, n := range names {
-				fmt.Fprintln(cmd.OutOrStdout(), n)
+			links := groupLinks(v, args[0])
+
+			if long {
+				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
+				fmt.Fprintln(tw, "KEY\tSOURCE")
+				for _, n := range names {
+					fmt.Fprintf(tw, "%s\t%s\n", n, linkRow(links, n))
+				}
+				if err := tw.Flush(); err != nil {
+					return err
+				}
+			} else {
+				for _, n := range names {
+					fmt.Fprintln(cmd.OutOrStdout(), n)
+				}
 			}
 
-			a.warnf("%d field(s) in group %q\n", len(names), args[0])
+			a.warnf("%d field(s) in group %q", len(names), args[0])
+			if len(links) > 0 {
+				a.warnf(", %d linked", len(links))
+			}
+			a.warnf("\n")
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&long, "long", false, "show which fields are links and their targets")
 	cmd.ValidArgsFunction = a.completeEntryNames
 	return cmd
 }
@@ -252,14 +278,15 @@ func newGroupGetCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			e, err := v.Get(args[0])
+			val, linkedTo, err := v.GroupFieldValue(args[0], args[1])
 			if err != nil {
 				return err
 			}
-			if e.Type != vault.TypeGroup {
-				return fmt.Errorf("%q is a flat secret; use \"sanduk get %s\"", args[0], args[0])
+			if linkedTo != "" {
+				a.warnf("%s is linked to secret %q\n", args[1], linkedTo)
 			}
-			return printGroupField(out, args[0], e, args[1], reveal)
+			_, err = fmt.Fprintln(out, revealOrRedact(val, reveal))
+			return err
 		},
 	}
 

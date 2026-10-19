@@ -3,8 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"strings"
 
 	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
@@ -53,14 +51,28 @@ func newGetCmd(a *app) *cobra.Command {
 
 			case vault.TypeGroup:
 				if field != "" {
-					return printGroupField(out, args[0], e, field, reveal)
+					// Resolve only the named field, so reviewing one secret
+					// does not read the group's other link targets.
+					val, linkedTo, err := v.GroupFieldValue(args[0], field)
+					if err != nil {
+						return err
+					}
+					if linkedTo != "" {
+						a.warnf("%s is linked to secret %q\n", field, linkedTo)
+					}
+					_, err = fmt.Fprintln(out, revealOrRedact(val, reveal))
+					return err
 				}
 				if !all {
 					return fmt.Errorf("%q is a group with %d field(s); pass --field KEY to print one, or --all for every field",
-						args[0], len(e.Fields))
+						args[0], len(e.Fields)+len(e.Links))
 				}
-				fields := make(map[string]string, len(e.Fields))
-				for k, val := range e.Fields {
+				values, err := v.GroupValues(args[0])
+				if err != nil {
+					return err
+				}
+				fields := make(map[string]string, len(values))
+				for k, val := range values {
 					fields[k] = revealOrRedact(val, reveal)
 				}
 				enc := json.NewEncoder(out)
@@ -81,17 +93,6 @@ func newGetCmd(a *app) *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("field", "all")
 	cmd.ValidArgsFunction = a.completeEntryNames
 	return cmd
-}
-
-// printGroupField prints one field of group entry e, redacted unless reveal.
-func printGroupField(w io.Writer, name string, e *vault.Entry, field string, reveal bool) error {
-	val, ok := e.Fields[field]
-	if !ok {
-		return fmt.Errorf("%q has no field %q (fields: %s)",
-			name, field, strings.Join(sortedMapKeys(e.Fields), ", "))
-	}
-	_, err := fmt.Fprintln(w, revealOrRedact(val, reveal))
-	return err
 }
 
 func revealOrRedact(val string, reveal bool) string {

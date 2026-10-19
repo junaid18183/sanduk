@@ -22,12 +22,13 @@ cli/                    cobra commands, registered in cli/root.go; thin, no doma
   root.go               Execute and the root command (persistent flags bound to app fields)
   add.go, add_group.go  add a flat secret / create a group
   group.go              group set/unset/show/get, the field-level edit path
+  group_link.go         group link/unlink: a field that points at a flat secret instead of copying it
   get.go                get (redacted unless --reveal) and the field printer group get shares
   exec.go, export.go    run a command with secrets / print them for scripts
   selector.go           the selection pipeline exec and export share (selectors, --only, --except)
   project.go            resolves the approved .sanduk.toml into a default entry
   allow.go              approve a repository's .sanduk.toml
-  doctor.go             group vs .env.example, and --metadata vault vs config drift
+  doctor.go             group vs .env.example, --metadata vault vs config drift, --links dangling links
   import.go             bulk import from a .env file
   list.go, remove.go, rotate.go, config.go, version.go
   completion.go         entry-name shell completion (opens the vault with a never-prompting passphrase source)
@@ -47,6 +48,7 @@ vault/                  all domain logic; no cobra imports here
   keyring.go            backend selection (one native backend per OS), keychain/service names
   backend_age.go        age-encrypted file backend
   backend_biometric_*   macOS Touch ID backend (darwin+cgo) and its stub
+  biometric_auth_darwin.{h,m}  shared LAContext, so one command's reads prompt once
   exec_unix.go          execve-based secret injection
   exec_windows.go       child-process variant for Windows (returns ExitError)
   exec_env.go           environment merging (strips SANDUK_* from the child)
@@ -234,7 +236,21 @@ Break these and you break the tool's security model:
     name matches every item in the biometric backend). File writes go through
     `vault.WriteFileAtomic`, and the age backend takes a cross-process lock
     (`filelock_*.go`) around read-modify-write.
-17. **The vault package reads no environment and never prompts.** Paths,
+17. **A group link stores a name, never a value.** `group link` records
+    `env name -> flat secret` in the group's `Entry.Links`; the value is read at
+    resolve time, so the target stays the single source of truth and a rotation
+    needs no re-sync. Links live in the backend entry, not in config.toml, so a
+    group stays self-contained: metadata can drift, and losing it must never
+    change which variables an entry injects. A link may only address a
+    `TypeSecret`, which makes a cycle impossible by construction rather than by
+    a depth limit; `validate()` enforces that a secret carries no links, that a
+    name is never both a stored field and a link, and that every link name
+    passes `ValidateEnvName`. A dangling link fails closed at resolve time
+    (never a silently absent variable), and `doctor --links` reports it. Reads
+    are deduplicated per target, which on `keychain-biometric` is one prompt per
+    distinct secret; that backend also shares one `LAContext` so a single
+    command authenticates once.
+18. **The vault package reads no environment and never prompts.** Paths,
     backend settings and passphrase sources all arrive in `vault.Options`; the
     CLI owns `SANDUK_*`, XDG and terminal I/O. That keeps the security-relevant
     code deterministic and testable, and means a vault test cannot reach a real

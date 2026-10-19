@@ -3,6 +3,45 @@
 sanduk is pre-1.0 (`0.0.x`). A release may change behaviour when that closes a
 security hole; each such change is listed under **Breaking**.
 
+## 0.0.5 — 2026-10-19
+
+### Added
+
+- **Group links: share one secret across groups without copying it.**
+  `sanduk group link <group> [VAR=]<secret>` points a group field at an existing
+  flat secret. The group stores the secret's *name*, never its value, and
+  resolves it on every read — so `sanduk rotate elevenlabs` updates every group
+  that links it, with no re-sync step. A bare secret name uses the variable that
+  secret is already exposed as (`--as`, or the upper-cased name).
+  `sanduk group unlink <group> KEY…` removes the pointer and leaves the secret
+  untouched.
+- A link may only address a flat secret, so a cycle is impossible by
+  construction, and a variable is either stored in the group or linked, never
+  both — there is no precedence rule to remember.
+- A dangling link (target removed, or no longer a flat secret) fails closed at
+  resolve time with a message naming the group, field and target, rather than
+  leaving the variable silently absent.
+- `sanduk doctor --links` checks every link in the vault and exits 3 if any
+  dangles.
+- `sanduk group show --long` shows which fields are links and what they point
+  at. The default output is unchanged — one bare name per line — so it keeps
+  piping into `--only` and `xargs`.
+- `get --field`, `get --all` and `group get` resolve links; `--field` resolves
+  only the field you asked for, so reviewing one secret does not read the rest
+  of the group.
+
+### Changed
+
+- `doctor <group> --template` now counts a linked field as present. Without this
+  every link would be reported as a missing template key.
+- `keychain-biometric` reads within one command now share a single `LAContext`
+  with a 10-second reuse window, so resolving a group and the secrets it links
+  prompts once rather than once per read. The window is per process and dies
+  with the command. **Unverified against a live biometric prompt** — like the
+  rest of that backend, it is experimental and compile-checked only.
+- Link targets are read once per distinct secret, so a group linking the same
+  secret under two names costs one read.
+
 ## 0.0.4 — 2026-10-19
 
 The first release after a full security, architecture and documentation audit.
