@@ -26,8 +26,8 @@ have configured, and `make clean` removes it again.
 | `.sanduk.toml` | Committed, non-secret: names the entry this project uses, so `sanduk exec -- <cmd>` works from any subdirectory. |
 | `.env.example` | Committed template: every variable the project needs, with dummy values. This is what `sanduk doctor` compares against. |
 | `demo.env` | The values `make setup` loads. Dummies, and deliberately missing `LEGACY_TOKEN`. |
-| `Makefile` | The workflow: `setup`, `doctor`, `show`, `dev`, `add-legacy`, `clean`. |
-| `setup.sh` | Loads `demo.env` as a group and prints which backend it is about to write to. |
+| `Makefile` | The workflow: `help`, `setup`, `doctor`, `show`, `dev`, `list`, `add-legacy`, `clean`. |
+| `setup.sh` | Loads `demo.env` as a group, prints which backend it is about to write to, and shows then approves `.sanduk.toml`. |
 | `check.sh` | Stands in for the app: reports which variables the process received, never their values. |
 | `.envrc` | Optional direnv integration. It does **not** load secrets into your shell, and explains why. |
 
@@ -37,7 +37,7 @@ The Makefile is a thin wrapper; these are the same steps without it.
 
 ```sh
 # 1. Load the values. The group name is a vault entry, not a file.
-sanduk add-group demo --from-file demo.env --description "sanduk demo project"
+sanduk add-group demo --from-dotenv demo.env --description "sanduk demo project"
 
 # 2. Look at what is stored without reading any value.
 sanduk group show demo     # one field name per line
@@ -45,21 +45,28 @@ sanduk list                # names, types and env mappings only
 
 # 3. Run something with the secrets injected. They exist only in this child:
 #    sanduk replaces itself with the command (execve), so the parent shell,
-#    and anything watching it, never holds them.
+#    and anything watching it, never holds them. (On Windows, which has no
+#    execve, sanduk starts the command as a child and waits for it.)
 sanduk exec demo -- ./check.sh
 
-# 4. Because .sanduk.toml names the entry, this is the same thing:
+# 4. .sanduk.toml names the entry, so after approving it (read it first — a
+#    repository could name any entry) the entry can be left out:
+cat .sanduk.toml
+sanduk allow
 sanduk exec -- ./check.sh
 
 # 5. Prove nothing leaked into your shell.
 ./check.sh                 # every key reports "not set"
 
 # 6. Report drift against the template. demo.env omits LEGACY_TOKEN, so this
-#    exits non-zero and names it. That is the point of the command.
+#    exits with status 3 and names it. That is the point of the command.
 sanduk doctor demo --template .env.example
 
-# 7. Fix the drift for one key, then check again.
-sanduk group set demo --from-env LEGACY_TOKEN   # value read from the environment
+# 7. Fix the drift for one key, then check again. --from-env reads each named
+#    key from the environment variable of the same name.
+export LEGACY_TOKEN=demo-legacy-token-not-secret
+sanduk group set demo LEGACY_TOKEN --from-env
+unset LEGACY_TOKEN
 sanduk doctor demo --template .env.example
 
 # 8. Narrow what a child receives, without touching the vault. An unknown key
@@ -99,10 +106,10 @@ Ask sanduk what it actually resolved, and where each value came from:
 
 ```sh
 sanduk config
-# path:     /Users/you/.config/sanduk/config.toml
-# backend:  keychain (from default)
+# path:    /Users/you/.config/sanduk/config.toml
+# backend: platform default (from default)
 # keychain: login (from default)
-# service:  sanduk (from default)
+# service: sanduk (from default)
 # flags beat environment variables, which beat this file
 ```
 

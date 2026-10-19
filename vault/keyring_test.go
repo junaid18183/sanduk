@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/99designs/keyring"
@@ -22,29 +23,32 @@ func TestNativeBackendsExcludesFileBackend(t *testing.T) {
 }
 
 func TestOpenKeyringFileBackendIsAge(t *testing.T) {
-	t.Setenv("SANDUK_BACKEND", "file")
-	t.Setenv("SANDUK_FILE_DIR", t.TempDir())
-	t.Setenv("SANDUK_FILE_PASSPHRASE", "test-passphrase")
-
-	kr, err := OpenKeyring()
+	o := testOptions(t)
+	kr, err := openKeyring(o)
 	if err != nil {
-		t.Fatalf("OpenKeyring: %v", err)
+		t.Fatalf("openKeyring: %v", err)
 	}
-	if _, ok := kr.(*ageKeyring); !ok {
+	ak, ok := kr.(*ageKeyring)
+	if !ok {
 		t.Fatalf("file backend is %T, want *ageKeyring", kr)
+	}
+	if want := filepath.Join(o.FileDir, o.Service+".age"); ak.path != want {
+		t.Fatalf("age path = %q, want %q", ak.path, want)
 	}
 }
 
-func TestAgePathLocation(t *testing.T) {
-	t.Setenv("SANDUK_FILE_DIR", "/tmp/sanduk-path-test")
-	if got, want := agePath("sanduk"), "/tmp/sanduk-path-test/sanduk.age"; got != want {
-		t.Fatalf("agePath = %q, want %q", got, want)
+func TestAgeBackendNeedsFileDir(t *testing.T) {
+	o := testOptions(t)
+	o.FileDir = ""
+	if _, err := openKeyring(o); err == nil {
+		t.Fatal("opened the age backend with no file directory")
 	}
 }
 
 func TestUnknownBackendIsRejected(t *testing.T) {
-	t.Setenv("SANDUK_BACKEND", "definitely-not-a-backend")
-	if _, err := OpenKeyring(); err == nil {
+	o := testOptions(t)
+	o.Backend = "definitely-not-a-backend"
+	if _, err := openKeyring(o); err == nil {
 		t.Fatal("expected an error for an unknown backend")
 	}
 }
@@ -69,8 +73,7 @@ func TestKeychainTarget(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		t.Setenv("SANDUK_KEYCHAIN", c.in)
-		got, err := keychainTarget()
+		got, err := keychainTarget(c.in)
 		if c.wantErr {
 			if err == nil {
 				t.Errorf("keychainTarget(%q) = %q, want an error", c.in, got)

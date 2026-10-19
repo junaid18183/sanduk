@@ -4,9 +4,18 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release workflow runs this first and publishes nothing unless it passes.
+  workflow_call:
 
 permissions:
   contents: read
+
+# Actions are pinned to full commit SHAs (tags can be moved); Dependabot keeps
+# them current. Tool versions are pinned too, so a green build is reproducible.
+env:
+  GOLANGCI_LINT_VERSION: v2.14.0
+  GOVULNCHECK_VERSION: v1.8.0
+  GORELEASER_VERSION: v2.18.2
 
 jobs:
   test:
@@ -15,13 +24,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: stable
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
 
       - name: gofmt
         run: |
@@ -32,15 +46,68 @@ jobs:
             exit 1
           fi
 
+      - name: go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
       - name: go vet
         run: go vet ./...
 
+      # The race detector needs cgo, which the Windows runner does not set up.
       - name: go test
-        run: go test -race ./...
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            go test ./...
+          else
+            go test -race ./...
+          fi
+
+      # What ships on macOS: cgo on, with the Keychain backend compiled in.
+      - name: darwin cgo build
+        if: runner.os == 'macOS'
+        run: |
+          CGO_ENABLED=1 go build -o /dev/null .
+          go test ./vault -run TestNativeBackendsIncludesKeychainOnMacOS -v
 
       - name: cross compile
+        if: runner.os == 'Linux'
         run: |
-          for target in linux/amd64 linux/arm64 windows/amd64 darwin/amd64 darwin/arm64; do
+          for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
             GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -o /dev/null .
             echo "built $target"
           done
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          install-only: true
+
+      # Lint the platform-specific files too (exec, file locks, project checks).
+      - name: golangci-lint
+        run: |
+          golangci-lint run ./...
+          GOOS=windows golangci-lint run ./...
+          GOOS=darwin golangci-lint run ./...
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+          govulncheck ./...
+
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: ${{ env.GORELEASER_VERSION }}
+          args: check

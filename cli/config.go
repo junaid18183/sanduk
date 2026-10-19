@@ -5,11 +5,10 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
 )
 
-func newConfigCmd() *cobra.Command {
+func newConfigCmd(a *app) *cobra.Command {
 	var (
 		pathOnly bool
 		edit     bool
@@ -24,48 +23,44 @@ func newConfigCmd() *cobra.Command {
 			"descriptions.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path := cfgFile
-			if path == "" {
-				path = vault.ConfigPath()
-			}
+			path := a.configPath()
 
 			if edit {
 				editor := os.Getenv("EDITOR")
 				if editor == "" {
 					editor = "vi"
 				}
-				c := exec.Command(editor, path)
+				c := exec.Command(editor, path) //nolint:gosec // $EDITOR is the user's own choice of program
 				c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 				return c.Run()
 			}
 
 			if pathOnly {
-				fmt.Println(path)
+				fmt.Fprintln(cmd.OutOrStdout(), path)
 				return nil
 			}
 
 			// The header goes to stderr, so stdout stays exactly the file and
 			// `sanduk config > copy.toml` remains useful.
-			warnf("# %-8s %s\n", "path:", path)
-			switch {
-			case settingsErr != nil:
-				warnf("# %-8s unreadable: %v\n", "settings:", settingsErr)
-			case resolved != nil:
-				warnf("# %-8s %s (from %s)\n", "backend:", orDefault(resolved.Backend, "platform default"), resolved.BackendFrom)
-				warnf("# %-8s %s (from %s)\n", "keychain:", resolved.Keychain, resolved.KeychainFrom)
-				warnf("# %-8s %s (from %s)\n", "service:", resolved.Service, resolved.ServiceFrom)
-				warnf("# %s\n", "flags beat environment variables, which beat this file")
+			a.warnf("# %-8s %s\n", "path:", path)
+			s := a.resolved()
+			if a.settingsErr != nil {
+				a.warnf("# %-8s unreadable: %v\n", "config:", a.settingsErr)
 			}
+			a.warnf("# %-8s %s (from %s)\n", "backend:", orDefault(s.Backend, "platform default"), s.BackendFrom)
+			a.warnf("# %-8s %s (from %s)\n", "keychain:", s.Keychain, s.KeychainFrom)
+			a.warnf("# %-8s %s (from %s)\n", "service:", s.Service, s.ServiceFrom)
+			a.warnf("# %s\n", "flags beat environment variables, which beat this file")
 
 			b, err := os.ReadFile(path)
 			if err != nil {
 				if os.IsNotExist(err) {
-					warnf("# (not created yet)\n")
+					a.warnf("# (not created yet)\n")
 					return nil
 				}
 				return err
 			}
-			_, err = os.Stdout.Write(b)
+			_, err = cmd.OutOrStdout().Write(b)
 			return err
 		},
 	}

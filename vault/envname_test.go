@@ -5,14 +5,14 @@ import "testing"
 func TestValidEnvName(t *testing.T) {
 	good := []string{"A", "_x", "AWS_ACCESS_KEY_ID", "a1", "X_AUTH_TOKEN_URDU"}
 	for _, n := range good {
-		if !ValidEnvName(n) {
-			t.Errorf("ValidEnvName(%q) = false, want true", n)
+		if !validEnvName(n) {
+			t.Errorf("validEnvName(%q) = false, want true", n)
 		}
 	}
 	bad := []string{"", "1A", "A B", "A-B", "A.B", "A=B", "A\tB"}
 	for _, n := range bad {
-		if ValidEnvName(n) {
-			t.Errorf("ValidEnvName(%q) = true, want false", n)
+		if validEnvName(n) {
+			t.Errorf("validEnvName(%q) = true, want false", n)
 		}
 	}
 }

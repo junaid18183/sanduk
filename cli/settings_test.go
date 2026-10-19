@@ -1,6 +1,9 @@
 package cli
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestResolveSettingPrecedence(t *testing.T) {
 	const envName = "SANDUK_SETTING_TEST"
@@ -39,5 +42,25 @@ func TestOrDefault(t *testing.T) {
 	}
 	if got := orDefault("set", "fallback"); got != "set" {
 		t.Fatalf("orDefault(set) = %q, want set", got)
+	}
+}
+
+func TestDefaultPathsPrecedence(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("XDG_DATA_HOME", xdg)
+
+	t.Setenv("SANDUK_CONFIG", "explicit.toml")
+	if got := defaultConfigPath(); got != "explicit.toml" {
+		t.Fatalf("SANDUK_CONFIG should win, got %q", got)
+	}
+	t.Setenv("SANDUK_CONFIG", "")
+	if got, want := defaultConfigPath(), filepath.Join(xdg, "sanduk", "config.toml"); got != want {
+		t.Fatalf("defaultConfigPath = %q, want %q", got, want)
+	}
+
+	t.Setenv("SANDUK_FILE_DIR", "")
+	if got, want := defaultFileDir(), filepath.Join(xdg, "sanduk"); got != want {
+		t.Fatalf("defaultFileDir = %q, want %q", got, want)
 	}
 }

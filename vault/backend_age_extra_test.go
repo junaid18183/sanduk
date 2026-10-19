@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,7 +18,7 @@ func TestAgeKeyringConfirmsPassphraseOnCreate(t *testing.T) {
 			return "one", nil
 		}
 		return "two", nil
-	})
+	}, io.Discard)
 	if err := k.Set(keyring.Item{Key: "a", Data: []byte("1")}); err == nil {
 		t.Fatal("expected a mismatched confirm on creation to fail")
 	}
@@ -26,7 +27,7 @@ func TestAgeKeyringConfirmsPassphraseOnCreate(t *testing.T) {
 func TestAgeKeyringConfirmMatchesOnCreate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vault.age")
 	calls := 0
-	k := newAgeKeyring(path, func(string) (string, error) { calls++; return "same", nil })
+	k := newAgeKeyring(path, func(string) (string, error) { calls++; return "same", nil }, io.Discard)
 	if err := k.Set(keyring.Item{Key: "a", Data: []byte("1")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
@@ -36,7 +37,7 @@ func TestAgeKeyringConfirmMatchesOnCreate(t *testing.T) {
 
 	// Reopening an existing vault prompts once, not twice.
 	again := 0
-	r := newAgeKeyring(path, func(string) (string, error) { again++; return "same", nil })
+	r := newAgeKeyring(path, func(string) (string, error) { again++; return "same", nil }, io.Discard)
 	if _, err := r.Get("a"); err != nil {
 		t.Fatalf("reopen Get: %v", err)
 	}

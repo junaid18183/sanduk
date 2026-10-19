@@ -1,0 +1,33 @@
+version: "2"
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - gosec
+    - misspell
+    - unconvert
+    - errorlint
+  settings:
+    gosec:
+      excludes:
+        - G204 # running a user-chosen command is what exec and config --edit are for
+        - G304 # every file path comes from the user (flags, args, config locations)
+        - G104 # duplicate of errcheck, which is configured below
+    errcheck:
+      # Writes to stdout/stderr and best-effort cleanup are deliberately unchecked.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*os.File).Close
+        - os.RemoveAll
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters: [gosec, errcheck]
+
+formatters:
+  enable:
+    - gofmt

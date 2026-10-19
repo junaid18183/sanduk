@@ -5,70 +5,78 @@ Guidance for AI coding agents working in this repository.
 ## What sanduk is
 
 `sanduk` is a CLI that stores API keys and other secrets in the operating
-system's secure keystore and injects them into child processes on demand. It is
-modelled on [aws-vault](https://github.com/99designs/aws-vault) but targets
-static API keys (OpenAI, DeepSeek, Stripe, …) rather than temporary AWS
-credentials. Written in Go, using `spf13/cobra` for the CLI, `99designs/keyring`
-for the native backends, and `filippo.io/age` for the encrypted-file backend.
+system's secure keystore and injects them into child processes on demand. It
+targets static API keys (OpenAI, DeepSeek, Stripe, …). Written in Go, using
+`spf13/cobra` for the CLI, `99designs/keyring` for the native backends, and
+`filippo.io/age` for the encrypted-file backend. The README's "Threat model"
+section says what it does and does not defend against.
 
 ## Repository layout
 
 ```
-main.go                 entry point; calls cli.Execute()
-cli/                    one file per cobra command, registered in cli/root.go
-  root.go               root command, --config/--backend/--keychain flags, config helpers
-  input.go              terminal input helpers (echo-off prompt, stdin, confirm)
-  util.go               shared helpers (field parsing, metadata recording)
-  selector.go           exec/export selectors (entry or ENVVAR=entry) + --only filter
-  project.go            resolves .sanduk.toml into a default entry
+main.go                 entry point; calls cli.Execute(), maps vault.ExitError to the exit status
+cli/                    cobra commands, registered in cli/root.go; thin, no domain logic
+  app.go                app: one invocation's flags, settings and stderr; openVault, config/trust paths,
+                        metadata recording, refuseOverwrite. Every command takes *app — no package globals
+  settings.go           flag > env > config > default resolution; default config and age paths (XDG)
+  root.go               Execute and the root command (persistent flags bound to app fields)
+  add.go, add_group.go  add a flat secret / create a group
   group.go              group set/unset/show/get, the field-level edit path
-  get.go                get (--field/--all/--reveal) and the terminal gate
+  get.go                get (redacted unless --reveal) and the field printer group get shares
+  exec.go, export.go    run a command with secrets / print them for scripts
+  selector.go           the selection pipeline exec and export share (selectors, --only, --except)
+  project.go            resolves the approved .sanduk.toml into a default entry
   allow.go              approve a repository's .sanduk.toml
-  completion.go         shell-completion helpers (entry-name completion)
-  doctor.go             compares a group against .env.example
-  settings.go           resolves backend settings (flag > env > config) for every command
-  *_test.go             command-level tests
+  doctor.go             group vs .env.example, and --metadata vault vs config drift
+  import.go             bulk import from a .env file
+  list.go, remove.go, rotate.go, config.go, version.go
+  completion.go         entry-name shell completion (opens the vault with a never-prompting passphrase source)
+  input.go              terminal input (echo-off prompt, stdin, confirm)
+  ui.go                 isTerminal, redact, requireTerminal (the terminal gate)
+  util.go               small generic helpers (dotenv files, JSON objects, sorted keys)
+  main_test.go          TestMain: isolates every SANDUK_* setting to a temp age vault
+  cmd_test.go           runCmd/runApp/testEnv helpers and command-level tests
 vault/                  all domain logic; no cobra imports here
+  vault.go              Vault: Get/Add/List/Remove/ResolveEnv, group field edits, ValidateEntryName
+  options.go            Options and Open: everything the vault needs, passed in explicitly
   entry.go              Secret/Group entry types and validation
-  vault.go              Vault: Get/Add/List/Remove/ResolveEnv, group field edits
-  config.go             non-secret metadata config (~/.config/sanduk/config.toml)
-  project.go            .sanduk.toml: the repo's default entry (non-secret)
-  keyring.go            backend selection, keychain target
+  config.go             metadata config (config.toml), UpdateConfig (locked), MetadataDrift
+  project.go            .sanduk.toml discovery and parsing (keeps the parsed bytes' hash)
+  project_unix.go       owner/mode checks for project files and private files (no-op on Windows)
+  trust.go              the per-user project-approval store (trusted.toml)
+  keyring.go            backend selection (one native backend per OS), keychain/service names
   backend_age.go        age-encrypted file backend
   backend_biometric_*   macOS Touch ID backend (darwin+cgo) and its stub
   exec_unix.go          execve-based secret injection
-  exec_windows.go       child-process variant for Windows
+  exec_windows.go       child-process variant for Windows (returns ExitError)
   exec_env.go           environment merging (strips SANDUK_* from the child)
+  envname.go            environment-variable name validation (the deny-list)
   format.go             shell/dotenv/json output
   dotenv.go             .env parsing (inline comments, multi-line quoted values)
   atomic.go             WriteFileAtomic: temp + fsync + rename
-  filelock_unix.go      flock-based cross-process lock (stub on Windows)
-  envname.go            environment-variable name validation
-  project.go            .sanduk.toml discovery
-  trust.go              the per-user project-approval store (trusted.toml)
-  redact.go             IsTerminal + Redact display helpers
-.github/workflows/      ci.yml (checks) and release.yml (GoReleaser on v* tags)
-.goreleaser.yml         release configuration
+  filelock_*.go         cross-process lock: flock on Unix, LockFileEx on Windows
+  exit.go               ExitError, so library code never calls os.Exit
+  testing.go            UseFastScryptForTests (panics outside go test)
+.github/                ci.yml (checks; reusable), release.yml (CI, then GoReleaser), dependabot.yml
+.golangci.yml           linter configuration
+.goreleaser.yml         release configuration (trimpath, cosign signing, SBOMs)
 examples/               config.toml.example, plus project/ — a runnable starter project
 ```
 
 ## Common tasks
 
 ```sh
-make build     # build ./sanduk
-make test      # go test ./...
-make vet       # go vet ./...
-make fmt       # gofmt -l -w .
+make build      # build ./sanduk
+make test       # go test ./...      (make race: with -race)
+make cover      # coverage summary
+make lint       # golangci-lint, pinned to the CI version
+make vuln       # govulncheck, pinned to the CI version
+make fmt        # gofmt -l -w .      (make fmt-check: report only)
+make check      # everything CI runs: fmt-check tidy-check vet race lint vuln cross
 ```
 
-Before pushing, run `gofmt -l .` (must be empty), `go vet ./...`, `go test ./...`,
-and a cross-compile check:
-
-```sh
-for t in linux/amd64 linux/arm64 windows/amd64; do
-  GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -o /dev/null .
-done
-```
+Before pushing, run `make check`. Lint the platform-specific files too:
+`GOOS=windows golangci-lint run ./...` and `GOOS=linux …` (CI does both).
 
 On macOS, also check the real darwin build (cgo **on**), which is what ships:
 
@@ -84,11 +92,12 @@ go test ./vault -run TestNativeBackendsIncludesKeychainOnMacOS
 | `SANDUK_BACKEND` / `--backend` | Backend: `keychain`, `keychain-biometric`, `secret-service`, `wincred`, `kwallet`, `pass`, `file`/`age`. |
 | `SANDUK_KEYCHAIN` / `--keychain` | macOS keychain name; default `login`. A name, never a path. |
 | `SANDUK_KEYCHAIN_PASSPHRASE` | Password used only when creating a dedicated keychain. |
-| `SANDUK_SERVICE` | Keychain service name; default `sanduk`. Also names the age file. |
-| `SANDUK_CONFIG` | Metadata config path; default `~/.config/sanduk/config.toml`. |
-| `SANDUK_TRUST` | Project-approval store; default `trusted.toml` next to the config. |
-| `SANDUK_FILE_DIR` | Directory of the age vault; default `~/.local/share/sanduk`. |
+| `SANDUK_SERVICE` / `--service` | Keychain service name; default `sanduk`. Also names the age file, so a name, never a path. |
+| `SANDUK_CONFIG` / `--config` | Metadata config path; default `$XDG_CONFIG_HOME/sanduk/config.toml`, else `~/.config/sanduk/config.toml`. |
+| `SANDUK_TRUST` | Project-approval store; default `trusted.toml` next to the config (moves with `--config`). Resolved with the other settings (`settings.TrustPath`). |
+| `SANDUK_FILE_DIR` | Directory of the age vault; default `$XDG_DATA_HOME/sanduk`, else `~/.local/share/sanduk`. |
 | `SANDUK_FILE_PASSPHRASE` | Passphrase for the age backend (non-interactive). |
+| `EDITOR` | Used by `sanduk config --edit`; default `vi`. |
 | `./.sanduk.toml` | Committed project file: `entry` and optional `only`. Non-secret. |
 
 `backend`, `keychain` and `service` may also be set in the metadata config. They
@@ -106,7 +115,8 @@ cd examples/project
 export SANDUK=$PWD/../../sanduk
 export SANDUK_BACKEND=file SANDUK_FILE_PASSPHRASE=fake \
        SANDUK_FILE_DIR="$(mktemp -d)" SANDUK_CONFIG="$(mktemp -d)/config.toml"
-make setup dev                   # doctor fails here by design: demo.env omits LEGACY_TOKEN
+make setup dev                   # setup shows .sanduk.toml and approves it
+make doctor                      # fails by design (exit 3): demo.env omits LEGACY_TOKEN
 make add-legacy
 make doctor                      # now clean
 make clean
@@ -139,30 +149,40 @@ Break these and you break the tool's security model:
    contain a secret value.
 2. **`list` must never read secret values.** It combines backend `Keys()` with
    config metadata (entry type, env mapping, description). Adding a value read to
-   the list path is a regression.
+   the list path is a regression. (The age backend's `Keys()` decrypts its single
+   document to list names; that is the backend's business, and the values are
+   never returned or printed. `doctor --metadata` reads values only under
+   `--fix`, to learn an untracked entry's type.)
 3. **Secret values are never accepted as command-line arguments** (argv is
    visible in process listings). Input comes from an echo-off prompt, `--from-env`,
    `--from-file`, or stdin. `group set` deliberately has no VALUE position for
-   this reason. `add-group --field K=V` and `--from-json` are the known
-   exceptions, kept for convenience — don't copy that shape into new commands.
+   this reason, and `add-group --field KEY=VALUE` / inline `--from-json` are
+   refused (`--field KEY` prompts; `--from-json` takes a file or `-`).
 4. **`get` is terminal-gated; `export` is not.** `get` refuses to write to a
    non-terminal unless `--force` is given. `export` is the sanctioned scripting
    interface and must keep working in pipes.
 5. **`exec` replaces the current process (`execve`) on Unix** so secrets exist
    only in the child. Windows has no `execve` and waits on the child instead.
 6. **Every backend implements `keyring.Keyring`** (`Get`, `GetMetadata`, `Set`,
-   `Remove`, `Keys`). New backends are selected in `vault/keyring.go` from
-   `SANDUK_BACKEND` / `--backend`.
+   `Remove`, `Keys`). New backends are selected in `vault/keyring.go`
+   (`openKeyring`) from `vault.Options.Backend`, which the CLI resolves from
+   `--backend`, `SANDUK_BACKEND` or the config file.
 7. **macOS binaries must be built with `CGO_ENABLED=1`.** Both the Keychain
    backend (`99designs/keyring`, tag `darwin && cgo`) and the
    `keychain-biometric` backend require cgo. A `CGO_ENABLED=0` macOS build has no
    OS keystore at all. `.goreleaser.yml` keeps darwin (cgo) separate from
    linux/windows and the release workflow runs on macOS for this reason.
-   `vault.TestNativeBackendsIncludesKeychainOnMacOS` guards it.
+   `vault.TestNativeBackendsIncludesKeychainOnMacOS` (tagged `darwin && cgo`, so
+   it only compiles in a cgo build) guards the library side; CI runs it in the
+   macOS job with `CGO_ENABLED=1`.
 8. **Never let the library's own file backend be selectable.** Its opener cannot
    fail, so it shadows a missing native keystore and then errors on the first
    read with "No directory provided for file keyring". `nativeBackends()`
-   filters it out and sanduk falls back to its own age backend instead.
+   filters it out. With no backend set, `defaultNativeBackend()` offers
+   `keyring.Open` **exactly one** backend per OS (keychain / wincred /
+   secret-service): `Open` silently tries the next allowed backend on failure,
+   so offering several would split the vault across stores. Only when that one
+   is not compiled in does sanduk fall back to its own age backend.
 9. **`.sanduk.toml` is non-secret, and only ever names an entry.** It is
    committed to repositories, so it must never grow a value field. It supplies
    the default entry plus an optional key subset (`only`), nothing more.
@@ -174,13 +194,16 @@ Break these and you break the tool's security model:
     name, never a path (`keychainTarget()` rejects separators). The default stays
     `login`; see the README for why a second keychain is not automatically safer.
 12. **Config-file backend settings are defaults, never overrides.** Precedence is
-    flag > env > config > platform default, resolved once in `PersistentPreRunE`
-    (`cli/settings.go`) and exported as the `SANDUK_*` variables the vault
-    package reads. Commands must report the resolved copy (`resolved`, set by
-    that hook), not re-resolve: after the export, every value would look like it
-    came `from env`. A broken config must not brick `sanduk config` — it is how
-    you inspect the config — so the failure lands in `settingsErr` and the
-    commands that need the config report it themselves.
+    flag > env > config > platform default, resolved once per invocation
+    (`app.resolved()`, primed by `PersistentPreRunE`; shell completion resolves
+    on first use) and handed to the vault as `vault.Options` by
+    `app.openVault()`. The config and trust paths come from
+    `app.configPath()`/`app.trustPath()`, so `--config` moves both. A broken
+    config still resolves flags and env (so `--backend` is honoured), lands in
+    `app.settingsErr`, and makes `openVault()` refuse — but `sanduk config`,
+    which does not open the vault, keeps working so you can inspect it. Config
+    read-modify-writes go through `vault.UpdateConfig`, which holds a
+    cross-process lock.
 13. **`exec` never hands the child a `SANDUK_*` variable.** `buildEnv` drops the
     prefix from the inherited environment, because `SANDUK_FILE_PASSPHRASE` and
     `SANDUK_KEYCHAIN_PASSPHRASE` each unlock the whole vault; leaking one would
@@ -188,17 +211,34 @@ Break these and you break the tool's security model:
     injection), and the output order is sorted, not map-ordered.
 14. **`.sanduk.toml` is untrusted until approved.** `defaultEntry` refuses a
     project file that is not in the trust store with a matching content hash, so
-    a cloned repository cannot choose which entry `exec`/`export` injects. The
-    store is `trusted.toml` (non-secret); editing the file revokes approval.
-15. **Destructive writes are never the default.** `add-group`/`import --group`
-    refuse to overwrite an existing group without `--replace`; `add` refuses to
+    a cloned repository cannot choose which entry `exec`/`export`/`doctor` uses.
+    The hash is of the bytes `LoadProject` parsed (kept on the `Project`), never a
+    second read. The store is `trusted.toml` (non-secret, mode 0600); a store
+    inside the project, or one readable by group/other, is refused, since
+    `SANDUK_TRUST`/`SANDUK_CONFIG` can move it.
+15. **Destructive writes are never the default.** `add-group` and `import` (flat
+    or `--group`) refuse to overwrite existing entries without `--replace`; `add` refuses to
     turn a group into a flat secret without `--replace`; `remove` requires `--yes`
     when stdin is not a terminal. Failing closed matters more than convenience.
-16. **Group field names are validated on write** (`vault.ValidateEnvName`), so a
-    name with a space, or a loader-affecting name such as `LD_PRELOAD`, cannot be
-    stored and later injected into a child. File writes go through
+    Decide from the backend, never from metadata alone, which can drift:
+    `refuseOverwrite` lists names (no decrypt), and `add` reads an existing entry
+    to learn its type. All non-fatal notices go to `Options.Warn`, never straight
+    to stderr, so callers such as completion can silence them.
+16. **Every variable name is validated on write and again on output**
+    (`vault.ValidateEnvName`): in `vault.Exec` and `vault.FormatEnv`, which every
+    name passes through after `--only`/`--except`. That covers group fields, flat
+    secret names, `ENVVAR=entry` bindings and config.toml mappings, and stops
+    shell injection through `export`, which prints names unquoted. `ParseDotenv`
+    rejects non-identifier keys. Don't add an output path that bypasses those
+    two functions. Entry names are checked by `vault.ValidateEntryName` (an empty
+    name matches every item in the biometric backend). File writes go through
     `vault.WriteFileAtomic`, and the age backend takes a cross-process lock
     (`filelock_*.go`) around read-modify-write.
+17. **The vault package reads no environment and never prompts.** Paths,
+    backend settings and passphrase sources all arrive in `vault.Options`; the
+    CLI owns `SANDUK_*`, XDG and terminal I/O. That keeps the security-relevant
+    code deterministic and testable, and means a vault test cannot reach a real
+    keychain by accident. Don't add an `os.Getenv` or a prompt under `vault/`.
 
 ## Coding conventions
 
@@ -209,21 +249,35 @@ Break these and you break the tool's security model:
 - Data goes to stdout; status/confirmation messages go to stderr (`warnf`).
 - Values entering the keychain are validated on write **and** on read
   (`entry.validate()`), so a hand-edited backend can't produce a half-valid entry.
-- Tests set configuration through `t.Setenv`; `vault.newFileVault` opens the age
-  backend in a `t.TempDir()`.
+- Tests in `vault` open backends with `testOptions(t)` (the age backend in a
+  `t.TempDir()`, a fake passphrase); the package reads no environment. Tests in
+  `cli` drive commands through `runCmd(t, stdin, args...)` after `testEnv(t)`
+  (see `cli/cmd_test.go`), each run a fresh `app`; `cli`'s `TestMain` also
+  points every `SANDUK_*` setting at a throwaway age vault first. Both call
+  `vault.UseFastScryptForTests()`, which panics outside `go test`.
+- There are no deprecated flags or compatibility aliases: sanduk is pre-1.0, so
+  rename or remove instead of keeping an old spelling, and note it in the
+  CHANGELOG under Breaking.
+- CI pins every action to a commit SHA and every tool to a version (see the
+  `env:` block in ci.yml). When bumping one, pick a release at least two weeks
+  old; Dependabot enforces the same cooldown.
 
 ## Adding a command
 
-1. Add `cli/<name>.go` with a `newXxxCmd() *cobra.Command` constructor.
+1. Add `cli/<name>.go` with a `newXxxCmd(a *app) *cobra.Command` constructor;
+   use `a.openVault()`, `a.loadConfig()`, `a.warnf()` and `cmd.OutOrStdout()`.
 2. Register it in `cli/root.go`'s `AddCommand` list.
 3. Document it in the README command table.
-4. Add a test; if it needs a vault, use the age backend.
+4. Add a test that runs it through `runCmd`.
 
 ## Releasing
 
-Pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs
-GoReleaser and publishes darwin/linux/windows (amd64/arm64) archives plus
-`checksums.txt`. The version is stamped with `-X .../cli.version` from the tag.
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs the full
+CI workflow first and then GoReleaser. It publishes darwin/linux/windows
+(amd64/arm64) archives, `checksums.txt` signed with keyless cosign
+(`checksums.txt.sigstore.json`), an SBOM per archive, and build-provenance
+attestations. The version is stamped with `-X .../cli.version` from the tag.
+Before tagging, move the CHANGELOG's "Unreleased" section under the new version.
 
 **Versioning: stay on `0.0.x`.** The next release is always the next
 `0.0.X` increment (`v0.0.1` → `v0.0.2` → …) unless the user asks for a specific

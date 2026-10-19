@@ -2,18 +2,21 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
 )
 
-func newExportCmd() *cobra.Command {
+func newExportCmd(a *app) *cobra.Command {
 	var (
 		format string
 		only   []string
 		except []string
 		output string
+		force  bool
 	)
 
 	cmd := &cobra.Command{
@@ -23,48 +26,31 @@ func newExportCmd() *cobra.Command {
 			"is not gated on a terminal: it is the sanctioned interface for scripting\n" +
 			"and .env files.\n\n" +
 			"Selectors are the same as for exec, and several may be merged. With a\n" +
-			vault.ProjectFileName + " in the repository the entry can be omitted.\n\n" +
+			vault.ProjectFileName + " in the repository the entry can be omitted, once the\n" +
+			"file has been approved with \"sanduk allow\".\n\n" +
 			"  CREDS_JSON=$(sanduk export aws-prod --format json)\n" +
 			"  docker compose --env-file <(sanduk export warden --format dotenv) up\n" +
 			"  eval \"$(sanduk export --format shell)\"   # entry from " + vault.ProjectFileName + "\n\n" +
-			"Prefer --output over a shell redirect: it writes the file with mode 0600,\n" +
-			"whereas `export ... >> .env` inherits your umask (often 0644). Note that even\n" +
+			"Prefer --output over a shell redirect: it writes the file with mode 0600\n" +
+			"(on Unix), whereas `export ... > .env` inherits your umask (often 0644).\n" +
+			"--output replaces the whole file and refuses an existing one unless --force\n" +
+			"is given; it never appends. A symlink at that path is replaced by a\n" +
+			"regular file rather than written through. Note that even\n" +
 			"then an exported file is a plaintext copy of the secrets; prefer exec when the\n" +
 			"values only need to reach one process.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := vault.New()
+			env, err := a.resolveSelection(args, only, except)
 			if err != nil {
 				return err
 			}
-			cfg, _, err := loadConfig()
-			if err != nil {
-				return err
-			}
-
-			sels := args
-			if len(sels) == 0 {
-				entry, projOnly, err := defaultEntry()
-				if err != nil {
-					return err
-				}
-				sels = []string{entry}
-				if len(only) == 0 {
-					only = projOnly
-				}
-			}
-
-			env, err := resolveSelectors(v, cfg, parseSelectors(sels))
-			if err != nil {
-				return err
-			}
-			env, err = filterOnly(env, only)
-			if err != nil {
-				return err
-			}
-			env = filterExcept(env, except)
 
 			if output != "" {
+				if _, err := os.Lstat(output); err == nil && !force {
+					return fmt.Errorf("%s already exists; pass --force to replace it", output)
+				} else if err != nil && !os.IsNotExist(err) {
+					return err
+				}
 				var buf bytes.Buffer
 				if err := vault.FormatEnv(&buf, env, format); err != nil {
 					return err
@@ -72,10 +58,14 @@ func newExportCmd() *cobra.Command {
 				if err := vault.WriteFileAtomic(output, buf.Bytes(), 0o600); err != nil {
 					return err
 				}
-				warnf("wrote %d variable(s) to %s (mode 0600)\n", len(env), output)
+				if runtime.GOOS == "windows" {
+					a.warnf("wrote %d variable(s) to %s\n", len(env), output)
+				} else {
+					a.warnf("wrote %d variable(s) to %s (mode 0600)\n", len(env), output)
+				}
 				return nil
 			}
-			return vault.FormatEnv(os.Stdout, env, format)
+			return vault.FormatEnv(cmd.OutOrStdout(), env, format)
 		},
 	}
 
@@ -86,7 +76,9 @@ func newExportCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&except, "except", nil,
 		"exclude these keys (comma-separated, repeatable)")
 	cmd.Flags().StringVarP(&output, "output", "o", "",
-		"write to this file with mode 0600 instead of stdout")
-	cmd.ValidArgsFunction = completeSelector
+		"write to this file (mode 0600) instead of stdout")
+	cmd.Flags().BoolVar(&force, "force", false,
+		"replace an existing --output file (a symlink is replaced, not written through)")
+	cmd.ValidArgsFunction = a.completeSelector
 	return cmd
 }

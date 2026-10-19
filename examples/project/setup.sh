@@ -7,7 +7,7 @@ set -eu
 
 # Same convention as the Makefile: override with SANDUK=/path/to/sanduk.
 SANDUK=${SANDUK:-sanduk}
-ENTRY=${SANDUK_ENTRY:-demo}
+ENTRY=${DEMO_ENTRY:-demo}
 
 cd "$(dirname "$0")"
 
@@ -37,8 +37,11 @@ if ! "$SANDUK" add-group "$ENTRY" --from-dotenv demo.env \
 fi
 
 # Approve the committed .sanduk.toml so `sanduk exec -- <cmd>` works from any
-# subdirectory without naming the entry. Editing the file revokes this.
-"$SANDUK" allow >/dev/null 2>&1 || true
+# subdirectory without naming the entry. Editing the file revokes this. Show the
+# file first: approval is a decision about its contents, so never make it blind.
+echo "Approving .sanduk.toml:" >&2
+sed 's/^/  /' .sanduk.toml >&2
+"$SANDUK" allow
 
 cat <<EOF
 

@@ -1,15 +1,13 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
-	"os"
 
 	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
 )
 
-func newAddCmd() *cobra.Command {
+func newAddCmd(a *app) *cobra.Command {
 	var (
 		fromEnv     string
 		fromFile    string
@@ -29,23 +27,41 @@ func newAddCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			if envName != "" {
-				if err := vault.ValidateEnvName(envName); err != nil {
-					return err
-				}
+			if err := vault.ValidateEntryName(name); err != nil {
+				return err
 			}
-
-			v, err := vault.New()
+			// Check the name the secret will actually be exposed as: --as, an
+			// existing mapping, or the upper-cased entry name. Without this,
+			// `sanduk add ld_preload` would become LD_PRELOAD in every child.
+			cfg, err := a.loadConfig()
 			if err != nil {
 				return err
 			}
-			if existing, gerr := v.Get(name); gerr == nil {
-				if existing.Type != vault.TypeSecret && !replace {
-					return fmt.Errorf("%q is a %s; pass --replace to overwrite it with a flat secret",
-						name, existing.Type)
+			exposed := envName
+			if exposed == "" {
+				exposed = cfg.EnvNameForSecret(name)
+			}
+			if err := vault.ValidateEnvName(exposed); err != nil {
+				if envName == "" {
+					return fmt.Errorf("%w; pass --as to choose a different variable name", err)
 				}
-			} else if !errors.Is(gerr, vault.ErrNotFound) {
-				return gerr
+				return err
+			}
+
+			v, err := a.openVault()
+			if err != nil {
+				return err
+			}
+			// Updating a flat secret in place is what add is for; anything else
+			// stored under the name would be destroyed, so that needs
+			// --replace. The type is read from the backend, not the metadata,
+			// which can drift: this costs one read of an existing entry (a
+			// Touch ID prompt on keychain-biometric), but the check fails
+			// closed.
+			if !replace {
+				if err := refuseNonSecret(v, name); err != nil {
+					return err
+				}
 			}
 
 			value, err := readSecret(fromEnv, fromFile, true)
@@ -56,11 +72,11 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 
-			if err := recordSecretMeta(name, envName, description); err != nil {
+			if err := a.recordSecretMeta(name, envName, description); err != nil {
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "Added secret %q\n", name)
+			a.warnf("Added secret %q\n", name)
 			return nil
 		},
 	}
@@ -68,10 +84,25 @@ func newAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&fromEnv, "from-env", "", "read the value from this environment variable")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "read the value from this file")
 	cmd.Flags().StringVar(&envName, "as", "", "environment variable to expose the secret as")
-	cmd.Flags().StringVar(&envName, "env", "", "deprecated: use --as")
 	cmd.Flags().StringVar(&description, "description", "", "human-readable description")
-	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite an entry of a different type (e.g. a group)")
+	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite an existing entry that is not a flat secret (e.g. a group)")
 	cmd.MarkFlagsMutuallyExclusive("from-env", "from-file")
-	_ = cmd.Flags().MarkDeprecated("env", "use --as")
 	return cmd
+}
+
+// refuseNonSecret fails when name exists in the vault as anything other than a
+// flat secret. A missing entry is fine: add creates it.
+func refuseNonSecret(v *vault.Vault, name string) error {
+	exists, err := v.Exists(name)
+	if err != nil || !exists {
+		return err
+	}
+	e, err := v.Get(name)
+	if err != nil {
+		return err
+	}
+	if e.Type != vault.TypeSecret {
+		return fmt.Errorf("%q is a %s; pass --replace to overwrite it with a flat secret", name, e.Type)
+	}
+	return nil
 }

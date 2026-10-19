@@ -18,7 +18,8 @@ that actually needs them.
 # from source
 make build        # produces ./sanduk
 
-# or with Go
+# or with Go (Go 1.26+; on macOS also a C toolchain, e.g. xcode-select --install,
+# because the Keychain backend needs cgo)
 go install github.com/junaid18183/sanduk@latest
 
 # or download a release binary
@@ -26,13 +27,22 @@ go install github.com/junaid18183/sanduk@latest
 ```
 
 Prebuilt binaries for macOS, Linux, and Windows (amd64/arm64) are attached to
-each [release](https://github.com/junaid18183/sanduk/releases).
+each [release](https://github.com/junaid18183/sanduk/releases), with a signed
+`checksums.txt`. To verify a download:
+
+```sh
+cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp 'https://github.com/junaid18183/sanduk/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum --ignore-missing -c checksums.txt     # macOS: shasum -a 256 ...
+gh attestation verify sanduk_*_darwin_arm64.tar.gz --repo junaid18183/sanduk
+```
 
 ## Quick start
 
 ```sh
 # a flat secret (value is read from an echo-off prompt, never from argv)
-sanduk add openai --env OPENAI_API_KEY
+sanduk add openai --as OPENAI_API_KEY
 
 # a group of related fields (field names are the env var names)
 sanduk add-group warden --from-dotenv .env.warden
@@ -40,8 +50,8 @@ sanduk add-group warden --from-dotenv .env.warden
 sanduk list
 ```
 
-> `add-group --field KEY=VALUE` also exists, but a value passed as an argument
-> is visible in `ps`. Prefer `--from-dotenv`, or `sanduk group set`, which prompts.
+> `add-group --field KEY` prompts for that field's value with echo off. Values
+> are never taken from the command line, where `ps` would show them.
 >
 > An existing entry is never replaced silently: `add-group` asks you to use
 > `group set` (to merge) or to pass `--replace` (to overwrite).
@@ -63,8 +73,11 @@ sanduk exec OPENAI_API_KEY=openai -- python train.py
 sanduk exec BASE=base warden -- pnpm dev
 
 # narrow what the child receives (unknown keys are an error, not a silence)
-sanduk exec warden --only DB_URL,API_KEY -- psql "$DB_URL"
+sanduk exec warden --only DB_URL,API_KEY -- sh -c 'psql "$DB_URL"'
 ```
+
+Quote a `$VAR` the command needs, as above: written bare, your shell would expand
+it *before* sanduk runs — and it is not set in your shell, which is the point.
 
 The secrets exist only inside the child process — they are never exported into
 your shell, so they are not inherited by anything else you launch from it.
@@ -100,16 +113,18 @@ Pair that with a committed `.env.example` (the keys, with dummy values) and
 
 ```sh
 $ sanduk doctor
-KEY          STATUS
-DB_URL       ok
-STRIPE_KEY   missing
-LEGACY_TOKEN extra
+KEY           STATUS
+DB_URL        ok
+STRIPE_KEY    missing
+LEGACY_TOKEN  extra
 warden: 1/2 template key(s) present; 1 not in the template: LEGACY_TOKEN
 sanduk: 1 key(s) missing from group "warden": STRIPE_KEY
 ```
 
-Missing keys exit non-zero; extra keys are a warning. Compare against another
-file with `--template`.
+Missing keys exit with status 3 (other failures exit 1); extra keys are a
+warning. Compare against another file with `--template`. `sanduk doctor
+--metadata` checks something else: that the metadata config agrees with the
+vault (`--fix` repairs it).
 
 Use `.envrc` only for interactive work — direnv exports into the shell, so every
 child process of that shell (including an agent) inherits the secrets:
@@ -129,39 +144,49 @@ it exports nothing and explains why, so the secrets still exist only in the
 a terminal):
 
 ```sh
-# shell / dotenv
+# shell (POSIX: sh, bash, zsh — not fish)
 eval "$(sanduk export openai)"
-sanduk export openai --format dotenv -o .env    # writes with mode 0600
+
+# dotenv file: mode 0600 on Unix; replaces the whole file, and refuses an
+# existing one unless --force is given (it never appends)
+sanduk export openai --format dotenv -o .env
 
 # feed a tool that insists on a file, without writing plaintext to disk
 docker compose --env-file <(sanduk export warden --format dotenv) up
 
-# the aws-vault-style JSON flow
-CREDS_JSON=$(sanduk export aws-prod --format json)
-export AWS_ACCESS_KEY_ID=$(echo "$CREDS_JSON" | jq -r .AWS_ACCESS_KEY_ID)
-export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS_JSON" | jq -r .AWS_SECRET_ACCESS_KEY)
+# JSON, for a program that reads it
+sanduk export aws-prod --format json | ./deploy --credentials-from-stdin
 ```
+
+`eval "$(sanduk export …)"` puts the secrets in your shell, where every later
+command can read them; prefer `exec`, which confines them to one process.
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
-| `sanduk add <name>` | Add/update a flat secret (`--as`, `--replace`). |
-| `sanduk add-group <name>` | Create a group (`--field K=V`, `--from-json`, `--from-dotenv`, `--replace`). |
-| `sanduk group set <name> [KEY…]` | Merge fields into a group (prompt, stdin, `--from-env`, `--from-dotenv`, `--description`). |
+| `sanduk add <name>` | Add/update a flat secret (`--as VAR`, `--from-env VAR`, `--from-file F`, `--description`, `--replace`). |
+| `sanduk add-group <name>` | Create a group (`--from-dotenv F`, `--from-json F\|-`, `--field KEY` prompts, `--description`, `--replace`). |
+| `sanduk group set <name> [KEY…]` | Merge fields into a group (prompt, stdin, `--from-env` reads each KEY from `$KEY`, `--from-dotenv F`, `--description`). |
 | `sanduk group unset <name> KEY…` | Remove fields from a group. |
 | `sanduk group show <name>` | List a group's field names (never values). |
-| `sanduk group get <name> KEY` | Print one field (redacted unless `--reveal`; terminal-gated, `--force`). |
-| `sanduk get <name>` | Print a value (terminal-gated; `--field`/`--all`/`--reveal` for groups). |
+| `sanduk group get <name> KEY` | Inspect one field (redacted unless `--reveal`; terminal-gated, `--force`). |
+| `sanduk get <name>` | Inspect a value, redacted unless `--reveal` (terminal-gated, `--force`; `--field`/`--all` for groups). |
 | `sanduk exec [selector…] -- <cmd>` | Run a command with secrets injected (`--only`, `--except`, `--list`). |
-| `sanduk export [selector…] -f shell\|dotenv\|json` | Emit secrets for scripts (`--only`, `--except`, `-o FILE` writes mode 0600). |
-| `sanduk list` | List names and metadata (never values; `--json`, `--names`). |
-| `sanduk doctor [entry]` | Check a group against `.env.example` (`--template`). |
-| `sanduk allow [dir]` | Approve a repository's `.sanduk.toml` for `exec`/`export`. |
-| `sanduk remove <name>` | Delete an entry (prompts; `--yes` when non-interactive). |
-| `sanduk rotate <name>` | Replace a flat secret's value. |
-| `sanduk import <file.env>` | Bulk-import a `.env` (`--group`, `--replace`, `--delete`, `--dry-run`). |
-| `sanduk config` | Show the config file and the settings sanduk resolved (`--path`, `--edit`). |
+| `sanduk export [selector…]` | Emit secrets for scripts (`-f shell\|dotenv\|json`, `--only`, `--except`, `-o FILE`, `--force`). |
+| `sanduk list` | List names and metadata (never values; `--json`, `--names`). An entry with no metadata shows as `unknown`. |
+| `sanduk doctor [entry]` | Check a group against `.env.example` (`--template F`); exits 3 on missing keys. `--metadata [--fix]` checks config.toml against the vault. |
+| `sanduk allow [dir]` | Approve a repository's `.sanduk.toml` for `exec`/`export`/`doctor`. |
+| `sanduk remove <name>` | Delete an entry and its metadata (prompts; `--yes` when non-interactive). |
+| `sanduk rotate <name>` | Replace a flat secret's value (`--from-env VAR`, `--from-file F`, or prompt/stdin). |
+| `sanduk import <file.env>` | Bulk-import a `.env` (`--group NAME`, `--replace` to overwrite existing entries, `--delete`, `--dry-run`). |
+| `sanduk config` | Show the config file and the settings sanduk resolved (`--path`, `--edit` opens `$EDITOR`). |
+| `sanduk completion <shell>` | Print a completion script for bash, zsh, fish or powershell. |
+| `sanduk version` | Print the version (also `--version`). |
+
+Global flags, accepted by every command: `--backend`, `--keychain`, `--service`
+(each overriding its `SANDUK_*` variable and the config file) and `--config`
+(the metadata config path; the trust store moves with it).
 
 Both `exec` and `export` take the same *selectors*: a bare entry name (a group
 contributes one variable per field), or `ENVVAR=entry` to bind a single flat
@@ -173,11 +198,14 @@ the entry when none is given (after you approve it with `sanduk allow`).
 
 - **Secrets** live in the keychain (service `sanduk`), one entry per name:
   either a flat `{value}` or a group `{fields}`.
-- **Metadata** lives in `~/.config/sanduk/config.toml` — entry names, env-var
-  mappings, and descriptions only. It never contains secret values, so it is
-  safe to read, commit, and version.
+- **Metadata** lives in `~/.config/sanduk/config.toml` (or
+  `$XDG_CONFIG_HOME/sanduk/config.toml`) — entry names, env-var mappings, and
+  descriptions only. It never contains secret values, so it is safe to read,
+  commit, and version. Project approvals live next to it in `trusted.toml`.
 - **`exec`** resolves an entry to environment variables and `execve`s your
-  command. **`export`** formats the same resolution for scripts and `.env`.
+  command, so sanduk itself is gone by the time it runs (on Windows, which has no
+  `execve`, sanduk starts the command and passes its exit status through).
+  **`export`** formats the same resolution for scripts and `.env`.
 
 ### Backends
 
@@ -195,17 +223,20 @@ platform default — so one config file can serve several machines:
 | `pass` | [password-store](https://www.passwordstore.org/) |
 | `file` / `age` | age-encrypted file, for headless or scripted use |
 
-When unset, the platform default is used. `OpenKeyring` falls back to the age
-file only when no native keystore is *compiled in* (for example a
-`CGO_ENABLED=0` macOS build); a native backend that merely fails to open returns
-an error, so secrets are never silently split across two stores.
+When unset, exactly one platform keystore is used: the Keychain on macOS, the
+Credential Manager on Windows, and the Secret Service elsewhere. If it fails to
+open, that is an error — sanduk never moves on to another store, so secrets are
+not silently split across two of them. `kwallet` and `pass` are used only when
+selected explicitly. sanduk falls back to the age file only when the platform
+keystore is not *compiled in* (for example a `CGO_ENABLED=0` macOS build).
 
 The `age` backend derives a key from a passphrase via age's scrypt, keeps every
 item in one encrypted document, and writes it atomically with mode `0600` under
 `$XDG_DATA_HOME/sanduk` (or `~/.local/share/sanduk`). It takes its passphrase from
 `SANDUK_FILE_PASSPHRASE` or prompts once per process, asks for it twice when the
-vault is first created (so a typo cannot lock it), and holds an exclusive lock
-while writing so two concurrent invocations cannot lose an update.
+vault is first created (so a typo cannot lock it), and holds an exclusive
+cross-process lock while writing so two concurrent invocations cannot lose an
+update. It warns if the file has become readable by other users.
 
 #### Requiring Touch ID (`keychain-biometric`)
 
@@ -245,7 +276,7 @@ password the system prompts for. Things worth knowing before you reach for it:
 - After a reboot the dedicated keychain is locked, so reads will prompt.
 - Prompt fatigue is mostly a **code-signing** problem: macOS ties keychain access
   to a signed identity, so an unsigned or rebuilt binary looks like a new app and
-  re-prompts. `aws-vault` signs its macOS releases for exactly this reason.
+  re-prompts. Signed macOS releases avoid this; sanduk's are not signed yet.
 - `SANDUK_KEYCHAIN_PASSPHRASE` sets the password non-interactively when the
   keychain is first created (for scripting; it is a secret, so prefer the prompt).
 
@@ -257,10 +288,13 @@ password the system prompts for. Things worth knowing before you reach for it:
 | `SANDUK_KEYCHAIN` | macOS keychain name (same as `--keychain`; default `login`). |
 | `SANDUK_KEYCHAIN_PASSPHRASE` | Password used when creating a dedicated keychain. |
 | `SANDUK_SERVICE` | Override the keychain service name (same as `--service`). |
-| `SANDUK_CONFIG` | Override the config file path. |
-| `SANDUK_TRUST` | Override the project-approval store path (`trusted.toml`). |
+| `SANDUK_CONFIG` | Override the config file path (same as `--config`). |
+| `SANDUK_TRUST` | Override the project-approval store path (default `trusted.toml` next to the config). |
 | `SANDUK_FILE_DIR` | Data directory for the `file`/`age` backend. |
 | `SANDUK_FILE_PASSPHRASE` | Passphrase for the `file`/`age` backend (non-interactive). |
+| `XDG_CONFIG_HOME` / `XDG_DATA_HOME` | Base directories for the config (`…/sanduk/config.toml`) and the age vault (`…/sanduk/`). |
+| `EDITOR` | Editor for `sanduk config --edit` (default `vi`). |
+| `PASSWORD_STORE_DIR` | Read by the `pass` backend, as by `pass` itself. |
 | `.sanduk.toml` (file) | Repository's default entry and optional key subset (approve with `sanduk allow`). |
 
 The metadata config can also carry standing backend settings. They are defaults
@@ -279,10 +313,10 @@ decide. Ask sanduk what it actually resolved, and where each value came from:
 
 ```sh
 $ sanduk config
-# path:     /Users/you/.config/sanduk/config.toml
-# backend:  keychain (from default)
+# path:    /Users/you/.config/sanduk/config.toml
+# backend: platform default (from default)
 # keychain: login (from default)
-# service:  sanduk (from default)
+# service: sanduk (from default)
 # flags beat environment variables, which beat this file
 ```
 
@@ -290,42 +324,124 @@ A value that loses to a flag or an environment variable says so (`from flag`,
 `from env`), so there is no guessing about which of the three is in play. The
 annotated file is [`examples/config.toml.example`](examples/config.toml.example).
 
-## Security notes
+## Threat model
+
+**What sanduk protects against.** The main case is a process that runs as you
+and reads files: an AI coding agent, a compromised dependency's install script,
+a tool that uploads your working tree. A plaintext `.env` gives all of these
+every secret. With sanduk the values are in the OS keystore, and a command gets
+them only when you run it under `sanduk exec`. sanduk also guards against a
+**cloned repository** choosing which secrets its own scripts receive, and
+against values leaking through process listings, shell history, logs or pipes.
+
+**What it does not protect against.** Anything that can run commands as you can
+run `sanduk` too, and root or a debugger attached to your processes can read
+anything. A secret handed to a child is that child's to leak. sanduk cannot
+make a static API key short-lived: there is no token exchange for one, so a
+leaked key stays valid until you rotate it.
+
+**Trust boundaries.** The keystore holds the values. config.toml and
+trusted.toml hold names and hashes only, and are written with mode 0600.
+`.sanduk.toml` comes from the repository and is untrusted until you approve its
+exact contents. Your shell's environment is outside the boundary: `export` and
+direnv put secrets there; `exec` does not.
+
+### Security notes
 
 - Values are never accepted as command-line arguments, so they cannot leak via
   process listings (`ps`). Input comes from an echo-disabled prompt, an env var,
-  a file, or stdin. The one exception is `add-group --field K=V` /
-  `--from-json`, kept for convenience; `--from-dotenv` and `group set` avoid it.
-- `exec` strips every `SANDUK_*` variable from the child environment, so a child
-  cannot read `SANDUK_FILE_PASSPHRASE` (or any other sanduk setting) out of its
-  own environment and unlock the whole vault. This keeps `--only` meaningful.
+  a file, or stdin — including for `add-group`, whose `--field KEY` prompts and
+  whose `--from-json` reads a file or stdin.
+- `exec` strips every `SANDUK_*` variable (in any letter case) from the child
+  environment, so a child cannot read `SANDUK_FILE_PASSPHRASE` (or any other
+  sanduk setting) out of its own environment and unlock the whole vault. This
+  keeps `--only` meaningful.
 - `--only` injects a least-privilege subset of a group, and an unknown key is an
   error rather than a silent omission. `--except` removes keys instead.
-- `sanduk get` refuses to print a secret to a non-terminal unless `--force` is
-  given. For a group, `--field KEY` reads one value and redacts it unless
-  `--reveal` is passed, so reviewing a secret never dumps the whole group.
-- Field names are validated on write, so a name with a space or a
-  loader-affecting name such as `LD_PRELOAD` or `NODE_OPTIONS` is refused rather
-  than injected into a child.
-- An unapproved `.sanduk.toml` is refused by `exec`/`export`; approve it with
-  `sanduk allow`, which stores a hash so an edit revokes the approval.
-- Unlike aws-vault, sanduk cannot issue short-lived credentials — there is no
-  token exchange for a static API key, so a leaked key does not expire. The
-  protection is that the value lives in the keychain and is injected only where
-  needed.
+- `sanduk get` is for inspecting: everything it prints shows only the last four
+  characters unless `--reveal` is passed, and it refuses to print to a
+  non-terminal unless `--force` is given. For a group, `--field KEY` reads one
+  value, so reviewing a secret never dumps the whole group. This gate is a speed
+  bump, not a boundary: `export` is ungated by design, for scripts.
+- Every variable name is validated when it is stored and again before it reaches
+  a child or `export`'s output: a group field, a flat secret's name, an
+  `ENVVAR=entry` binding and a name from config.toml alike. A name that is not a
+  plain identifier is refused, as are names that change how a child runs
+  (`LD_*`, `DYLD_*`, `GIT_CONFIG_*`, `SANDUK_*`, `NODE_OPTIONS`, `PYTHONPATH`,
+  `BASH_ENV`, …).
+- `export --format shell` is POSIX shell syntax (sh, bash, zsh). Do not `eval`
+  it in fish, which treats backslashes inside single quotes differently.
+- An unapproved `.sanduk.toml` is refused by `exec`, `export` and `doctor`;
+  approve it with `sanduk allow`, which stores a hash of the exact bytes it
+  parsed, so an edit revokes the approval. A project file that is world-writable
+  or owned by another user is refused, and so is a trust store that lives inside
+  the project or that group/other users can access.
+- With no backend set, sanduk uses exactly one platform keystore and treats a
+  failure to open it as an error, so secrets never end up split across stores.
 - A process running as *you* with shell access can still run `sanduk`. Pair this
   with your agent's own command-permission rules, and use the experimental
   `keychain-biometric` backend so reading a secret requires Touch ID, which a
   headless agent cannot satisfy.
 
+Report a vulnerability privately — see [SECURITY.md](SECURITY.md).
+
+## Windows
+
+sanduk runs on Windows with the Credential Manager (`wincred`) as its default
+backend, or the age file. The differences:
+
+- `exec` starts the command as a child and waits for it, since Windows has no
+  `execve`; the child's exit status is passed through.
+- Files are not protected by Unix mode bits. "Mode 0600" in this README means
+  nothing there; the file inherits the directory's ACL, so keep the config and
+  age directories under your user profile. The ownership checks on
+  `.sanduk.toml` and the trust store are Unix-only.
+- Environment variable names are case-insensitive, and sanduk strips `SANDUK_*`
+  from a child in any case.
+
+## Shell completion
+
+```sh
+sanduk completion zsh > "${fpath[1]}/_sanduk"          # zsh
+sanduk completion bash > /etc/bash_completion.d/sanduk  # bash
+sanduk completion fish > ~/.config/fish/completions/sanduk.fish
+```
+
+Completion suggests entry names. It lists names only, and with the age backend
+only when `SANDUK_FILE_PASSPHRASE` is set, so it never stops to prompt.
+
+## Backup, migration and removal
+
+- **Back up** the vault and its metadata together. With the age backend that is
+  `~/.local/share/sanduk/<service>.age` plus `config.toml` and `trusted.toml`
+  from `~/.config/sanduk/`. With a native keystore, the items live in that store
+  (on macOS, Keychain Access lists them under the service `sanduk`), and the
+  same two config files hold the metadata.
+- **Move entries to another backend** one at a time, since by design there is no
+  command that dumps every secret at once:
+
+  ```sh
+  # a group
+  sanduk --backend file import --group warden \
+    <(sanduk --backend keychain export warden --format dotenv)
+  # a flat secret
+  sanduk --backend keychain export openai --format json | jq -r .OPENAI_API_KEY |
+    sanduk --backend file add openai --as OPENAI_API_KEY
+  ```
+
+  Then remove the originals with `sanduk --backend keychain remove <name>`.
+- **Revoke a project approval** by deleting its line from `trusted.toml` (or
+  editing the project file, which revokes it automatically).
+- **Uninstall**: `sanduk remove` each entry (`sanduk list --names`), then delete
+  the binary, `~/.config/sanduk/` and `~/.local/share/sanduk/`.
+
 ## Troubleshooting
 
-### `sanduk: No directory provided for file keyring`
+### `sanduk: no OS keystore compiled in, using the encrypted file backend`
 
 This means the binary has **no macOS Keychain backend**. That backend is
 compiled only under `darwin && cgo` in `99designs/keyring`, so a macOS build
-made with `CGO_ENABLED=0` has no OS keystore at all and falls through to a
-misconfigured file backend.
+made with `CGO_ENABLED=0` has no OS keystore at all.
 
 Official release binaries are built with cgo. If you built sanduk yourself,
 build with cgo enabled (the default on macOS):
@@ -334,8 +450,7 @@ build with cgo enabled (the default on macOS):
 go install github.com/junaid18183/sanduk@latest
 ```
 
-When no OS keystore is *compiled in*, sanduk says so and falls back to the
-age-encrypted file instead of failing:
+Until you rebuild, sanduk uses the age-encrypted file and says so:
 
 ```
 sanduk: no OS keystore compiled in, using the encrypted file backend at ~/.local/share/sanduk/sanduk.age
@@ -347,21 +462,50 @@ Each backend is a separate namespace. Items stored with `keychain` are not
 visible under `keychain-biometric`, and vice versa. Use the same `--backend`
 you stored them with.
 
+### `… .sanduk.toml is not approved`
+
+The repository's project file has not been approved, or has changed since. Read
+it, then run `sanduk allow`. Approval is per file contents, so any edit — even
+one you made — needs a fresh `allow`.
+
+### `could not open the secret-service keystore` (Linux)
+
+With no backend set, sanduk uses only the Secret Service, and reports an error
+rather than switching to another store. Make sure a Secret Service provider is
+running and unlocked (GNOME Keyring, or KWallet 5.97+ which also provides it),
+or pick a backend explicitly: `--backend kwallet`, `--backend pass` or
+`--backend file`. Headless machines usually want `file`.
+
+### `trust store: … has mode 0644`
+
+sanduk writes `trusted.toml` as 0600 and refuses one that other users can read
+or write, since such a file may not be yours (a repository's `.envrc` could point
+`SANDUK_TRUST` at one it ships). If it is yours, `chmod 600` it.
+
+### `config is unreadable`
+
+config.toml failed to parse. Commands that use the vault stop rather than write
+secrets whose metadata cannot be recorded. `sanduk config` still prints the file
+and the error; fix it with `sanduk config --edit`. If entries and metadata have
+drifted, `sanduk doctor --metadata --fix` repairs them.
+
 ## Development
 
 ```sh
 make test     # unit + integration tests (encrypted-file backend, no keychain prompts)
-make vet
+make check    # everything CI runs: gofmt, go mod tidy, vet, race tests, lint, govulncheck, cross-compile
 ```
 
-CI runs `gofmt`, `go vet`, the test suite, and cross-compilation on Linux and
-macOS. Releases are cut by pushing a `v*` tag, which triggers GoReleaser.
+CI runs on Linux, macOS and Windows. Releases are cut by pushing a `v*` tag: the
+release workflow runs CI first, then GoReleaser, which signs `checksums.txt` with
+keyless cosign and attaches SBOMs and build-provenance attestations. See
+[CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
 
 **macOS builds must use `CGO_ENABLED=1`** or the Keychain backend is omitted.
 `.goreleaser.yml` therefore splits darwin (cgo) from linux/windows (no cgo), and
 the release workflow runs on a macOS runner so darwin can be linked against the
-Security framework. `vault.TestNativeBackendsIncludesKeychainOnMacOS` fails the
-build if that regresses.
+Security framework. `vault.TestNativeBackendsIncludesKeychainOnMacOS`, which CI
+runs on macOS with cgo enabled, fails if the Keychain backend is not compiled in.
 
 ## License
 

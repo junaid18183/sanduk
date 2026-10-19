@@ -28,6 +28,7 @@ const ageFileVersion = 1
 type ageKeyring struct {
 	path     string
 	passFunc func(string) (string, error)
+	warn     io.Writer // non-fatal notices; Options.Warn
 
 	mu     sync.Mutex
 	loaded bool
@@ -35,8 +36,8 @@ type ageKeyring struct {
 	pass   string // cached for the lifetime of the process
 }
 
-func newAgeKeyring(path string, passFunc func(string) (string, error)) *ageKeyring {
-	return &ageKeyring{path: path, passFunc: passFunc}
+func newAgeKeyring(path string, passFunc func(string) (string, error), warn io.Writer) *ageKeyring {
+	return &ageKeyring{path: path, passFunc: passFunc, warn: warn}
 }
 
 type ageFile struct {
@@ -59,8 +60,10 @@ func (k *ageKeyring) passphrase() (string, error) {
 	if k.pass != "" {
 		return k.pass, nil
 	}
+	// A missing or empty file is a new vault; confirm the passphrase for
+	// both, or a typo locks the vault under a passphrase nobody knows.
 	creating := false
-	if _, err := os.Stat(k.path); errors.Is(err, os.ErrNotExist) {
+	if fi, err := os.Stat(k.path); errors.Is(err, os.ErrNotExist) || (err == nil && fi.Size() == 0) {
 		creating = true
 	}
 
@@ -114,6 +117,11 @@ func (k *ageKeyring) load() error {
 		k.loaded = true
 		return nil
 	}
+	if err := checkPrivateFile(k.path); err != nil {
+		// The file is encrypted, so this is a warning rather than a refusal:
+		// a readable copy is still exposed to offline passphrase guessing.
+		fmt.Fprintf(k.warn, "sanduk: warning: %v\n", err)
+	}
 
 	pass, err := k.passphrase()
 	if err != nil {
@@ -165,6 +173,9 @@ func (k *ageKeyring) save() error {
 	recipient, err := age.NewScryptRecipient(pass)
 	if err != nil {
 		return err
+	}
+	if testScryptWorkFactor > 0 {
+		recipient.SetWorkFactor(testScryptWorkFactor)
 	}
 
 	var buf bytes.Buffer

@@ -5,19 +5,6 @@ import (
 	"testing"
 )
 
-func TestConfigPathPrecedence(t *testing.T) {
-	t.Setenv("SANDUK_CONFIG", "/tmp/explicit.toml")
-	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg")
-	if got := ConfigPath(); got != "/tmp/explicit.toml" {
-		t.Fatalf("SANDUK_CONFIG should win, got %q", got)
-	}
-
-	t.Setenv("SANDUK_CONFIG", "")
-	if got := ConfigPath(); got != filepath.Join("/tmp/xdg", "sanduk", "config.toml") {
-		t.Fatalf("XDG should apply, got %q", got)
-	}
-}
-
 func TestConfigRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "config.toml")
 

@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newRotateCmd() *cobra.Command {
+func newRotateCmd(a *app) *cobra.Command {
 	var (
 		fromEnv  string
 		fromFile string
@@ -22,7 +22,7 @@ func newRotateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			v, err := vault.New()
+			v, err := a.openVault()
 			if err != nil {
 				return err
 			}
@@ -42,7 +42,7 @@ func newRotateCmd() *cobra.Command {
 				return err
 			}
 
-			warnf("Rotated secret %q\n", name)
+			a.warnf("Rotated secret %q\n", name)
 			return nil
 		},
 	}
@@ -50,6 +50,6 @@ func newRotateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&fromEnv, "from-env", "", "read the new value from this environment variable")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "read the new value from this file")
 	cmd.MarkFlagsMutuallyExclusive("from-env", "from-file")
-	cmd.ValidArgsFunction = completeEntryNames
+	cmd.ValidArgsFunction = a.completeEntryNames
 	return cmd
 }
