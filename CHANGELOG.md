@@ -3,6 +3,96 @@
 sanduk is pre-1.0 (`0.0.x`). A release may change behaviour when that closes a
 security hole; each such change is listed under **Breaking**.
 
+## 0.0.7 — 2026-10-26
+
+A vault that is used grows a long tail: entries that belong to one repository,
+and flat secrets that exist only to feed a group. This release teaches sanduk
+which entries belong where, so a listing shows what you are standing in, and
+makes setting a repository up a single command.
+
+### Added
+
+- **`sanduk init`.** Declare a repository before it has any secrets: it writes
+  `.sanduk.toml`, approves it, and records the directory against the group.
+  The entry does not have to exist yet. An existing file is never replaced
+  without `--force`.
+- **`sanduk init --from-template`** is the way into a project somebody else
+  set up. It reads the key names from a committed `.env.example` or
+  `.env.template` and prompts for each value with echo off. The placeholders
+  in the file are never stored, an empty answer skips a key for `sanduk
+  doctor` to report, and the keys entered become the `only` list. `doctor`
+  now also looks for `.env.template` before asking for `--template`.
+- **`sanduk init --envrc`** writes a direnv script for the project, with the
+  warning that belongs beside it. Off by default: direnv exports into the
+  shell, so everything started from that shell inherits the values, and it
+  re-runs the export on every load.
+- **A group belongs to a directory.** `sanduk add-group`, run at a repository
+  root, records that directory as the group's `location` in `config.toml` and
+  writes and approves a `.sanduk.toml` naming it, unless one already exists.
+  `sanduk allow` records the location too. The location lives in your own
+  private config rather than in the repository, so no cloned repository can
+  claim a group by shipping a file; a project file still needs approving, and
+  still wins when the two disagree. `--no-project` creates a plain global
+  group. A location that no longer exists — deleted, moved, or never cloned
+  on this machine — claims nothing and the group is global again, marked
+  `(missing)` by `group list` and reported by `doctor --metadata`.
+- **`include` in `.sanduk.toml`** names the global secrets and groups a
+  repository also needs. They resolve before the project's own entry, in the
+  order given, so the project wins on a variable two of them both provide —
+  the same rule as `sanduk exec a b c`. Still names only, still approved as
+  one file, and nothing is injected anywhere without a project file asking
+  for it.
+- **`only` keeps itself current.** Once a project file lists the keys it
+  expects, `group set`, `group unset`, `group link` and `group unlink` add
+  and remove them in the file and re-approve it. Only that assignment is
+  rewritten, so comments survive; a file with no `only` is never given one,
+  and an unapproved file is never touched. Because the list tracks the
+  project's own group, it narrows that entry alone and not the entries the
+  file includes — filtering those with it would drop everything they
+  contribute the first time it synced. The `--only` flag is unchanged and
+  still narrows the whole selection.
+- **Scoped listings.** `sanduk list` shows the entries in scope: inside a
+  repository, that repository's entry expanded into the variables it
+  provides, then the global entries. Left out by default are entries
+  belonging to a repository (yours or another one) and flat secrets a group
+  links to, which already show as the `SOURCE` of the variable they supply.
+  The count of hidden entries always goes to stderr, `--all` adds a `SCOPE`
+  column and shows everything, and `--scope project|member|global` shows one
+  kind. Nothing about resolution changed: `exec` and `export` inject exactly
+  what they injected before.
+- **`sanduk group list`.** Every group with the directory it belongs to,
+  built from metadata alone — no entry is opened. `--here` narrows to the
+  group of the working directory, `--keys` adds the variables each group
+  provides (that one does open every group), plus `--json` and `--names`.
+- **Scope in the MCP server.** `list_entries` labels each entry `project`,
+  `member` or `global` and marks the one the working directory resolves to,
+  so an agent can tell this repository's secrets from every other
+  repository's. It still returns every entry, and still no value.
+- **`sanduk doctor --links --fix`** rebuilds the `linked_by` hints in
+  `config.toml` from the links the backend actually holds. Those hints only
+  group related entries in a listing; nothing resolves through them, so a
+  stale one can misplace a row and nothing more.
+
+### Fixed
+
+- macOS keychain items sanduk writes now list sanduk in their ACL
+  (`KeychainTrustApplication`), so reading one back does not ask the user to
+  approve sanduk again. A prompt is per item, so resolving a group with three
+  links asked four times. This applies to items written from now on; "Always
+  Allow" does the same for existing ones. The trust is tied to the binary's
+  signature, so an unsigned rebuild is still a new application.
+- `sanduk group show` and `sanduk doctor --links` read each entry once instead
+  of twice. On a backend that asks per read — a dedicated keychain, or
+  `keychain-biometric` — the second read was a second password or Touch ID
+  prompt for an entry sanduk had just read.
+
+### Breaking
+
+- `sanduk list` no longer prints every entry by default, and `--json` now
+  emits an object (`project`, `entries`, `hidden`) instead of a bare array,
+  with a `scope` on each entry. `sanduk list --all --json` is the closest
+  equivalent of the old output.
+
 ## 0.0.6 — 2026-10-19
 
 Five additions, all of which keep the existing rule that a value leaves the

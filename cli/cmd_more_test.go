@@ -234,9 +234,18 @@ func TestListFormats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list --json: %v", err)
 	}
-	var rows []map[string]string
-	if err := json.Unmarshal([]byte(out), &rows); err != nil || len(rows) != 2 {
+	var doc struct {
+		Entries []map[string]any `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil || len(doc.Entries) != 2 {
 		t.Fatalf("list --json = %q (%v)", out, err)
+	}
+	// Every row says which scope it is in, so a caller can tell a project's
+	// entries from the ones that stand on their own.
+	for _, r := range doc.Entries {
+		if r["scope"] != "global" {
+			t.Fatalf("row %v: want scope global outside any project", r)
+		}
 	}
 }
 

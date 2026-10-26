@@ -49,7 +49,14 @@ sanduk add openai --as OPENAI_API_KEY
 # a group of related fields (field names are the env var names)
 sanduk add-group warden --from-dotenv .env.warden
 
-sanduk list
+sanduk list          # the entries in scope here; --all for every one
+```
+
+In a repository, set it up in one step instead — including one somebody else
+wrote, whose keys you fill in from its committed template:
+
+```sh
+cd ~/work/warden && sanduk init --from-template
 ```
 
 > `add-group --field KEY` prompts for that field's value with echo off. Values
@@ -221,32 +228,139 @@ warning about.
 
 ### Project workflow
 
-Commit a `.sanduk.toml` in the repository root to name the entry the project uses
-(and optionally the keys you normally need), so nobody has to retype it:
+Start from the repository, before it has any secrets:
 
-```toml
-# .sanduk.toml — non-secret, safe to commit
-entry = "warden"
-only  = ["DB_URL", "API_KEY"]
+```sh
+cd ~/work/warden
+sanduk init                              # entry named after the directory
+sanduk init warden --from-dotenv .env    # or name it, and seed it now
+sanduk group set warden STRIPE_KEY       # fill it in afterwards
 ```
 
-A project file is **not trusted automatically**: a cloned repository could
+`sanduk init` writes `.sanduk.toml`, approves it, and records the directory
+against the group. The entry does not have to exist yet.
+
+**Joining a project that already exists** is the common case, and most of them
+commit a key list. Point `init` at it and answer the prompts:
+
+```sh
+git clone https://github.com/someone/their-app && cd their-app
+sanduk init --from-template
+# .env.example lists 7 key(s); enter each value, or press enter to skip it.
+# DATABASE_URL:
+# STRIPE_SECRET_KEY:
+# …
+```
+
+It reads the key names from `.env.example` (or `.env.template`) and prompts for
+each value with echo off. The placeholders in the file are never stored, an
+empty answer skips a key, and the keys you fill in become the `only` list.
+Whatever you skipped, `sanduk doctor` reports as missing until you come back
+to it:
+
+```sh
+$ sanduk doctor
+KEY                STATUS
+DATABASE_URL       ok
+STRIPE_SECRET_KEY  missing
+```
+
+Or create the group first — from inside a repository it becomes that
+repository's group:
+
+```sh
+cd ~/work/warden
+sanduk add-group warden --from-dotenv .env
+# Added group "warden" with 4 field(s)
+# Recorded "warden" as the group for /Users/you/work/warden
+# Wrote and approved .sanduk.toml — commit it: it names the entry, never a value
+```
+
+Two things were recorded, and they are different statements:
+
+- **`.sanduk.toml`**, in the repository, names the entry for everyone who
+  clones it. It is non-secret and meant to be committed. Add `only` to narrow
+  it to the keys the project normally needs:
+
+  ```toml
+  # .sanduk.toml — non-secret, safe to commit
+  entry = "warden"
+  only  = ["DB_URL", "API_KEY"]
+  ```
+
+- **`location`**, in your own `config.toml`, notes which directory the group
+  belongs to. It is private to your machine, it holds no value, and it is what
+  keeps this group out of listings made anywhere else:
+
+  ```toml
+  [groups.warden]
+    description = "Warden staging"
+    location    = "/Users/you/work/warden"
+  ```
+
+`sanduk add-group` only does this at a repository root, and never overwrites an
+existing `.sanduk.toml`. `--no-project` creates a plain global group instead.
+
+#### Layering a global entry underneath
+
+A repository usually needs a few things that are not its own: a shared
+provider key, a group of tool credentials. `include` names them, and they
+resolve **before** the project's entry, so the project wins on a variable two
+of them both provide — the same left-to-right, last-wins rule as
+`sanduk exec openai agents warden`:
+
+```toml
+# .sanduk.toml
+include = ["openai", "agents"]   # global flat secrets and groups, underneath
+entry   = "warden"               # this repository's own group, on top
+only    = ["DB_URL", "API_KEY", "OPENAI_API_KEY"]
+```
+
+```sh
+sanduk init warden --include openai,agents
+```
+
+This is the layering direnv gives you, and it is declared in the repository
+for the same reason: a global config that silently added secrets to every
+`sanduk exec` anywhere would be the opposite of least privilege. `include`
+names entries, never values, and the whole file is approved as one — a
+repository cannot widen what it receives without the change showing up in
+`sanduk allow`.
+
+#### `only` keeps itself current
+
+`only` records the keys the project expects, and `--only` errors on a key the
+entry does not have, so a typo fails loudly. Once the list exists, sanduk
+keeps it in step: `group set`, `group unset`, `group link` and `group unlink`
+add and remove keys in the file and re-approve it, preserving your comments.
+
+Delete the line to opt out for good — sanduk keeps such a list current, it
+never starts one.
+
+Because the list tracks the project's own group, it does **not** narrow what
+`include` brings in; those entries were named in the same reviewed file and
+pass through in full. `--only` on the command line is one explicit request,
+so it still narrows everything.
+
+For a repository you cloned rather than set up, the project file arrives with
+it — and is **not trusted automatically**, because a cloned repository could
 otherwise name any entry (say `aws-prod`) and have its scripts receive those
-secrets. Approve it once, after reviewing it, and re-approve after any edit:
+secrets. Review it, then approve it (which also records the location):
 
 ```sh
 sanduk allow
 ```
 
-Now the entry can be omitted, from any subdirectory:
+Approval is a hash of the file, so re-approve after any edit. Either way, the
+entry can now be omitted, from any subdirectory:
 
 ```sh
 sanduk exec -- pnpm dev
 sanduk export --format dotenv
 ```
 
-Pair that with a committed `.env.example` (the keys, with dummy values) and
-`sanduk doctor` reports drift between what the app expects and what is stored:
+Pair that with a committed `.env.example` or `.env.template` (the keys, with
+dummy values) and `sanduk doctor` reports drift between what the app expects and what is stored:
 
 ```sh
 $ sanduk doctor
@@ -263,13 +377,74 @@ warning. Compare against another file with `--template`. `sanduk doctor
 --metadata` checks something else: that the metadata config agrees with the
 vault (`--fix` repairs it).
 
+### What `list` shows
+
+A vault that is used grows a long tail, and most of it is not what you are
+looking at right now. `sanduk list` shows the entries that matter where you
+are standing:
+
+```sh
+$ cd ~/work/warden && sanduk list
+PROJECT  warden (group)  /Users/you/work/warden
+KEY             SOURCE
+API_KEY         stored
+DB_URL          stored
+OPENAI_API_KEY  -> openai
+
+NAME        TYPE    ENV / INFO
+elevenlabs  secret  ELEVENLABS_API_KEY
+groq        secret  GROQ_API_KEY
+sanduk: 14 entry/entries hidden (9 member, 5 project) — see "sanduk list --all"
+```
+
+Two kinds are left out by default:
+
+- **project** — entries that belong to a repository, yours or another one.
+  Inside that repository its entry is shown first instead, expanded into the
+  variables it provides. That expansion opens one entry (never a value, and it
+  may prompt once on a presence-gated backend); `--no-keys` skips it.
+- **member** — flat secrets that a group links to. They are that group's
+  building blocks, and they already appear as the `SOURCE` of the variable
+  they supply.
+
+`--all` shows everything with a `SCOPE` column, and `--scope project|member|global`
+shows one kind. The hidden count always goes to stderr, so a shorter list never
+reads as a missing entry. Membership is tracked in `config.toml` as a
+`linked_by` hint, kept current by `group link`/`unlink` and rebuilt from the
+vault by `sanduk doctor --links --fix`; nothing resolves through it, so a stale
+hint can only misplace a row in a listing.
+
+A location that no longer exists claims nothing: if you delete or move the
+repository, the group is global again and shows up everywhere, marked
+`(missing)` by `sanduk group list` and reported by `sanduk doctor --metadata`.
+Re-run `sanduk allow` in its new place to repair it.
+
+`sanduk group list` is the view from the other side — every group, and the
+repository each one serves:
+
+```sh
+$ sanduk group list
+NAME      LOCATION                  INFO
+warden *  /Users/you/work/warden    Warden staging
+agents    -                         LLM provider keys
+```
+
 Use `.envrc` only for interactive work — direnv exports into the shell, so every
 child process of that shell (including an agent) inherits the secrets:
+
+```sh
+sanduk init --envrc     # writes it, with that warning next to it
+```
 
 ```sh
 # .envrc — committed; names only, never values
 eval "$(sanduk export --format shell)"
 ```
+
+It is off by default for that reason, and it does not make the prompting any
+cheaper: direnv runs the export on every load, so a group with three links
+costs four keychain reads each time you enter the directory, where
+`sanduk exec` costs them once per command you actually run.
 
 [`examples/project/.envrc`](examples/project/.envrc) takes the opposite approach:
 it exports nothing and explains why, so the secrets still exist only in the
@@ -392,23 +567,25 @@ you want described with `--backend`/`--config` or the `SANDUK_*` variables.
 
 | Command | Description |
 | --- | --- |
+| `sanduk init [entry]` | Write and approve this repository's `.sanduk.toml` (`--from-template` prompts for the keys a committed `.env.example`/`.env.template` lists, `--from-dotenv`, `--include`, `--only`, `--envrc`, `--force`). |
 | `sanduk add <name>` | Add/update a flat secret (`--as VAR`, `--from-env VAR`, `--from-file F`, `--description`, `--expires`, `--replace`). |
-| `sanduk add-group <name>` | Create a group (`--from-dotenv F`, `--from-json F\|-`, `--field KEY` prompts, `--description`, `--expires`, `--replace`). |
+| `sanduk add-group <name>` | Create a group (`--from-dotenv F`, `--from-json F\|-`, `--field KEY` prompts, `--description`, `--expires`, `--replace`). At a repository root it also records the location and writes `.sanduk.toml`; `--no-project` opts out. |
 | `sanduk add-file <name>` | Store a credential file, injected as a path (`--from-file F\|-`, `--as VAR`, `--filename`, `--description`, `--expires`, `--replace`). |
 | `sanduk group set <name> [KEY…]` | Merge fields into a group (prompt, stdin, `--from-env` reads each KEY from `$KEY`, `--from-dotenv F`, `--description`, `--expires`). |
 | `sanduk group unset <name> KEY…` | Remove fields from a group. |
 | `sanduk group link <name> [VAR=]<secret>` | Point a group field at a flat secret instead of copying its value. |
 | `sanduk group unlink <name> KEY…` | Remove a link; the secret it pointed at is untouched. |
+| `sanduk group list` | List every group and the directory it belongs to (`--here`, `--keys`, `--json`, `--names`). |
 | `sanduk group show <name>` | List a group's field names (never values; `--long` shows which are links). |
 | `sanduk group get <name> KEY` | Inspect one field (redacted unless `--reveal`; terminal-gated, `--force`). |
 | `sanduk get <name>` | Inspect a value, redacted unless `--reveal` (terminal-gated, `--force`; `--field`/`--all` for groups). |
 | `sanduk exec [selector…] -- <cmd>` | Run a command with secrets injected (`--only`, `--except`, `--list`, `--materialize DIR`). |
 | `sanduk export [selector…]` | Emit secrets for scripts (`-f shell\|dotenv\|json`, `--only`, `--except`, `-o FILE`, `--force`, `--materialize DIR`). |
-| `sanduk list` | List names and metadata (never values; `--json`, `--names`). An entry with no metadata shows as `unknown`. |
-| `sanduk doctor [entry]` | Check a group against `.env.example` (`--template F`); exits 3 on missing keys. `--metadata [--fix]` checks config.toml against the vault; `--links` checks every group link resolves; `--expiry [--within N]` reports rotation deadlines. |
+| `sanduk list` | List the entries in scope: this repository's, plus the global ones (never values; `--all`, `--scope`, `--no-keys`, `--json`, `--names`). An entry with no metadata shows as `unknown`. |
+| `sanduk doctor [entry]` | Check a group against `.env.example` (`--template F`); exits 3 on missing keys. `--metadata [--fix]` checks config.toml against the vault; `--links` checks every group link resolves (`--fix` rebuilds the `linked_by` hints); `--expiry [--within N]` reports rotation deadlines. |
 | `sanduk scan [path…]` | Search the tree (`--git`, `--shell`) for stored values that escaped the vault; exits 3 on a find. Reads every value, so it needs `--yes` without a terminal. |
 | `sanduk mcp` | Serve entry metadata to an AI agent over MCP — names only, never values, no execution. |
-| `sanduk allow [dir]` | Approve a repository's `.sanduk.toml` for `exec`/`export`/`doctor`. |
+| `sanduk allow [dir]` | Approve a repository's `.sanduk.toml` for `exec`/`export`/`doctor`, and record the group's location. |
 | `sanduk remove <name>` | Delete an entry and its metadata (prompts; `--yes` when non-interactive). |
 | `sanduk rotate <name>` | Replace a flat secret's value (`--from-env VAR`, `--from-file F`, or prompt/stdin; `--expires` to move the deadline). |
 | `sanduk import <file>` | Bulk-import a `.env`, CSV export or `.1pux` archive (`--format`, `--group NAME`, `--replace`, `--delete`, `--dry-run`). |
@@ -510,7 +687,15 @@ password the system prompts for. Things worth knowing before you reach for it:
 - It is a **second unlock boundary**, not a strictly stronger one. A dedicated
   keychain's password normally has to live in the login keychain, which collapses
   per-item access control into one grant.
-- After a reboot the dedicated keychain is locked, so reads will prompt.
+- After a reboot the dedicated keychain is locked, so reads will prompt. It also
+  re-locks on a timer: `security show-keychain-info ~/Library/Keychains/<name>.keychain-db`
+  shows it, and `security set-keychain-settings -l ~/Library/Keychains/<name>.keychain-db`
+  drops the idle timeout while keeping lock-on-sleep.
+- **A prompt is per item, not per command.** Resolving a group with three links
+  reads four entries, so an untrusted binary is asked four times. sanduk puts
+  itself in the ACL of every item it writes, which removes the prompt for
+  items written after v0.0.7; "Always Allow" does the same for older ones, one
+  at a time.
 - Prompt fatigue is mostly a **code-signing** problem: macOS ties keychain access
   to a signed identity, so an unsigned or rebuilt binary looks like a new app and
   re-prompts. Signed macOS releases avoid this; sanduk's are not signed yet.

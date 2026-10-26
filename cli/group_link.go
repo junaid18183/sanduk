@@ -49,8 +49,16 @@ func newGroupLinkCmd(a *app) *cobra.Command {
 			if err := a.recordGroupMeta(group, descFlag); err != nil {
 				return err
 			}
+			// Note the membership so a listing can keep the group's building
+			// blocks out of the top level. It is a display hint: the link
+			// itself lives in the entry, and resolution never reads this.
+			if err := a.updateConfig(func(c *vault.Config) { c.RecordLink(sel.name, group) }); err != nil {
+				return err
+			}
 
 			a.warnf("Linked %s in group %q -> secret %q\n", envName, group, sel.name)
+			// A link adds a variable to the group like any other field.
+			a.syncProjectOnly(group, []string{envName}, nil)
 			return nil
 		},
 	}
@@ -78,12 +86,25 @@ func newGroupUnlinkCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Read the targets before the links are gone, so the display
+			// hints can be dropped with them.
+			dropped := groupLinks(v, group)
 			if err := v.UnlinkGroupField(group, keys); err != nil {
+				return err
+			}
+			if err := a.updateConfig(func(c *vault.Config) {
+				for _, k := range keys {
+					if target := dropped[k]; target != "" {
+						c.RemoveLink(target, group)
+					}
+				}
+			}); err != nil {
 				return err
 			}
 
 			a.warnf("Unlinked %d field(s) from group %q (the linked secrets are untouched)\n",
 				len(keys), group)
+			a.syncProjectOnly(group, nil, keys)
 			return nil
 		},
 	}

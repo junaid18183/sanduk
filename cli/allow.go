@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/junaid18183/sanduk/vault"
 	"github.com/spf13/cobra"
@@ -42,6 +43,21 @@ func newAllowCmd(a *app) *cobra.Command {
 			a.warnf("Approved %s\n", path)
 			a.warnf("entry %q (sha256 %s)\n", proj.Entry, hash[:12])
 			a.warnf("Re-run after editing the file; edits revoke the approval.\n")
+
+			// Approving a repository is also the moment its entry stops
+			// being a loose entry and becomes that repository's, so listings
+			// elsewhere can leave it out. Only a group gets a location: a
+			// flat secret named by a project file is still usable anywhere.
+			projDir := filepath.Dir(path)
+			var recorded bool
+			if err := a.updateConfig(func(c *vault.Config) {
+				recorded = c.SetGroupLocation(proj.Entry, projDir)
+			}); err != nil {
+				return err
+			}
+			if recorded {
+				a.warnf("Recorded %q as the group for %s\n", proj.Entry, projDir)
+			}
 			return nil
 		},
 	}

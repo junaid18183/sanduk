@@ -16,6 +16,22 @@ import (
 // defaultTemplateName is compared against a group when --template is not given.
 const defaultTemplateName = ".env.example"
 
+// templateNames are the committed key lists a repository is checked against,
+// in the order they are looked for. Both spellings are common and a project
+// that uses the second one should not need --template on every run.
+var templateNames = []string{defaultTemplateName, ".env.template"}
+
+// findTemplate returns the first template present in dir, or "" if none is.
+func findTemplate(dir string) string {
+	for _, n := range templateNames {
+		path := filepath.Join(dir, n)
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
 // exitDrift is doctor's exit status when the group is missing template keys.
 const exitDrift = 3
 
@@ -44,7 +60,9 @@ func newDoctorCmd(a *app) *cobra.Command {
 			"type reads it, which may prompt on some backends.\n\n" +
 			"--links checks every group link: a link whose target was removed, or whose\n" +
 			"target is no longer a flat secret, would fail the next exec. It reads each\n" +
-			"entry, so it may prompt on a presence-gated backend.\n\n" +
+			"entry, so it may prompt on a presence-gated backend. --fix does not repair\n" +
+			"a dangling link — only \"sanduk group link\" or \"unlink\" can decide that — it\n" +
+			"rewrites the linked_by hints list uses to group related entries.\n\n" +
 			"--expiry lists the entries carrying a rotation deadline, soonest first, and\n" +
 			"exits 3 if any has passed or falls due within --within days (default 14).\n" +
 			"It reads metadata only: no value is decrypted, so it is safe in CI.",
@@ -73,11 +91,7 @@ func newDoctorCmd(a *app) *cobra.Command {
 				if len(args) > 0 {
 					return fmt.Errorf("--links checks the whole vault; it takes no entry")
 				}
-				if fix {
-					return fmt.Errorf("--fix applies to --metadata; a dangling link is repaired with " +
-						"\"sanduk group link\" or \"sanduk group unlink\"")
-				}
-				return a.doctorLinks(cmd)
+				return a.doctorLinks(cmd, fix)
 			}
 			if fix {
 				return fmt.Errorf("--fix applies to --metadata")
@@ -110,7 +124,10 @@ func newDoctorCmd(a *app) *cobra.Command {
 			}
 			tmplPath := template
 			if tmplPath == "" {
-				tmplPath = filepath.Join(base, defaultTemplateName)
+				if tmplPath = findTemplate(base); tmplPath == "" {
+					return fmt.Errorf("no template in %s (looked for %s); create one or pass --template",
+						base, strings.Join(templateNames, ", "))
+				}
 			}
 			raw, err := os.ReadFile(tmplPath)
 			if err != nil {
@@ -245,11 +262,23 @@ func (a *app) doctorMetadata(cmd *cobra.Command, fix bool) error {
 	for _, n := range orphaned {
 		fmt.Fprintf(tw, "%s\tnot in vault\n", n)
 	}
+	// A group whose directory is gone still works — it is global again —
+	// so this is reported next to the drift, not treated as drift. --fix
+	// leaves it alone: the directory may be on a volume that is not
+	// mounted, and re-approving in the new place is the honest repair.
+	stale := cfg.StaleLocations()
+	for _, n := range stale {
+		fmt.Fprintf(tw, "%s\tlocation %s is gone; the group is global until "+
+			"\"sanduk allow\" is run in its new place\n", n, cfg.Groups[n].Location)
+	}
 	if err := tw.Flush(); err != nil {
 		return err
 	}
 	if len(untracked)+len(orphaned) == 0 {
 		a.warnf("metadata matches the vault (%d entries)\n", len(keys))
+		if len(stale) > 0 {
+			a.warnf("%d group location(s) no longer exist\n", len(stale))
+		}
 		return nil
 	}
 	if !fix {
@@ -290,7 +319,7 @@ func (a *app) doctorMetadata(cmd *cobra.Command, fix bool) error {
 // doctorLinks reports group links whose target has been removed or is no longer
 // a flat secret. Such a link fails closed at resolve time; this finds it before
 // a deploy does.
-func (a *app) doctorLinks(cmd *cobra.Command) error {
+func (a *app) doctorLinks(cmd *cobra.Command, fix bool) error {
 	v, err := a.openVault()
 	if err != nil {
 		return err
@@ -300,30 +329,35 @@ func (a *app) doctorLinks(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Entry types are read once, not once per link, so a group linking the same
-	// secret twice costs one read.
+	// Every entry is read exactly once. The type and the links are both kept
+	// from that one read — a second read of the same entry is a second
+	// prompt on a dedicated keychain or keychain-biometric — and the values
+	// are not, so nothing secret is held while the report is built.
 	types := make(map[string]string, len(names))
+	links := make(map[string]map[string]string, len(names))
 	for _, n := range names {
 		e, err := v.Get(n)
 		if err != nil {
 			return err
 		}
 		types[n] = e.Type
+		if e.Type == vault.TypeGroup {
+			links[n] = e.Links
+		}
 	}
 
 	type linkRef struct{ group, key, target, status string }
 	var rows []linkRef
 	dangling := 0
+	// The link graph as the backend actually holds it, which is what the
+	// config's display hints are supposed to mirror.
+	byTarget := map[string][]string{}
 	for _, n := range names {
 		if types[n] != vault.TypeGroup {
 			continue
 		}
-		e, err := v.Get(n)
-		if err != nil {
-			return err
-		}
-		for _, k := range sortedMapKeys(e.Links) {
-			target := e.Links[k]
+		for _, k := range sortedMapKeys(links[n]) {
+			target := links[n][k]
 			status := "ok"
 			switch typ, ok := types[target]; {
 			case !ok:
@@ -333,9 +367,18 @@ func (a *app) doctorLinks(cmd *cobra.Command) error {
 			}
 			if status != "ok" {
 				dangling++
+			} else {
+				byTarget[target] = append(byTarget[target], n)
 			}
 			rows = append(rows, linkRef{group: n, key: k, target: target, status: status})
 		}
+	}
+
+	if fix {
+		if err := a.updateConfig(func(c *vault.Config) { c.SetLinkedBy(byTarget) }); err != nil {
+			return err
+		}
+		a.warnf("fixed: rebuilt the linked_by hints for %d secret(s)\n", len(byTarget))
 	}
 
 	if len(rows) == 0 {

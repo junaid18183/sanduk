@@ -19,8 +19,8 @@ func newGroupCmd(a *app) *cobra.Command {
 			"is an environment variable name. Use add-group to create one, and these\n" +
 			"subcommands to edit it a field at a time.",
 	}
-	cmd.AddCommand(newGroupSetCmd(a), newGroupUnsetCmd(a), newGroupShowCmd(a), newGroupGetCmd(a),
-		newGroupLinkCmd(a), newGroupUnlinkCmd(a))
+	cmd.AddCommand(newGroupListCmd(a), newGroupSetCmd(a), newGroupUnsetCmd(a), newGroupShowCmd(a),
+		newGroupGetCmd(a), newGroupLinkCmd(a), newGroupUnlinkCmd(a))
 	return cmd
 }
 
@@ -124,6 +124,9 @@ func newGroupSetCmd(a *app) *cobra.Command {
 			}
 
 			a.warnf("Updated %d field(s) in group %q\n", len(m), name)
+			// A project file that lists the keys it expects should not need
+			// hand-editing every time the group grows one.
+			a.syncProjectOnly(name, sortedMapKeys(m), nil)
 			return nil
 		},
 	}
@@ -203,6 +206,7 @@ func newGroupUnsetCmd(a *app) *cobra.Command {
 			}
 
 			a.warnf("Removed %d field(s) from group %q\n", len(keys), name)
+			a.syncProjectOnly(name, nil, keys)
 			return nil
 		},
 	}
@@ -228,11 +232,22 @@ func newGroupShowCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			names, err := v.GroupFieldNames(args[0])
+			cfg, err := a.loadConfig()
 			if err != nil {
 				return err
 			}
-			links := groupLinks(v, args[0])
+			// One read, not one per thing we want from it. The entry carries
+			// both its field names and its links, and on a backend that
+			// prompts per read — a dedicated keychain, or keychain-biometric
+			// — a second read is a second prompt for the same entry.
+			vars, err := v.Variables(args[0], cfg)
+			if err != nil {
+				return err
+			}
+			if vars.Type != vault.TypeGroup {
+				return fmt.Errorf("%q is a %s, not a group", args[0], vars.Type)
+			}
+			names, links := vars.Names, vars.Links
 
 			if long {
 				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
