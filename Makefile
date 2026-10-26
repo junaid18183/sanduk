@@ -58,5 +58,6 @@ cross:
 # Everything CI checks, in one go.
 check: fmt-check tidy-check vet race lint vuln cross
 
+# Everything the build generates, which is everything .gitignore lists.
 clean:
-	rm -f $(BINARY) coverage.out
+	rm -rf $(BINARY) coverage.out dist *.test

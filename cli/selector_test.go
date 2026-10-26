@@ -107,7 +107,7 @@ func TestResolveSelectorsMergesLeftToRight(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sel, err := resolveSelectors(v, cfg, parseSelectors([]string{"warden", "DB_URL=db-alt"}))
+	sel, err := newResolver(v, cfg).resolveSelectors(parseSelectors([]string{"warden", "DB_URL=db-alt"}))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestResolveSelectorsMergesLeftToRight(t *testing.T) {
 		t.Fatalf("API_KEY = %q, want the group's other field", env["API_KEY"])
 	}
 
-	sel, err = resolveSelectors(v, cfg, parseSelectors([]string{"DB_URL=db-alt", "warden"}))
+	sel, err = newResolver(v, cfg).resolveSelectors(parseSelectors([]string{"DB_URL=db-alt", "warden"}))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -135,27 +135,27 @@ func TestResolveSelectorsRejectsGroupBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := resolveSelectors(v, &vault.Config{}, parseSelectors([]string{"A=warden"})); err == nil {
+	if _, err := newResolver(v, &vault.Config{}).resolveSelectors(parseSelectors([]string{"A=warden"})); err == nil {
 		t.Fatal("expected binding a group to a single variable to fail")
 	}
 }
 
 func TestResolveSelectorsMissingEntry(t *testing.T) {
 	v := newTestVault(t)
-	if _, err := resolveSelectors(v, &vault.Config{}, parseSelectors([]string{"nope"})); err == nil {
+	if _, err := newResolver(v, &vault.Config{}).resolveSelectors(parseSelectors([]string{"nope"})); err == nil {
 		t.Fatal("expected an error for a missing entry")
 	}
 }
 
-func TestDefaultEntryFailsWithoutProjectFile(t *testing.T) {
+func TestDefaultProjectsFailsWithoutProjectFile(t *testing.T) {
 	// A temporary directory has no .sanduk.toml in its ancestry.
 	t.Chdir(t.TempDir())
-	if _, _, err := newApp().defaultEntry(); err == nil {
+	if _, err := newApp().defaultProjects(); err == nil {
 		t.Fatal("expected an error when no project file exists")
 	}
 }
 
-func TestDefaultEntryFromProjectFile(t *testing.T) {
+func TestDefaultProjectsFromProjectFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, vault.ProjectFileName)
 	if err := writeFileString(path, "entry = \"warden\"\nonly = [\"DB_URL\"]\n"); err != nil {
@@ -173,10 +173,14 @@ func TestDefaultEntryFromProjectFile(t *testing.T) {
 		t.Fatalf("approve: %v", err)
 	}
 
-	entries, only, err := newApp().defaultEntry()
+	layers, err := newApp().defaultProjects()
 	if err != nil {
-		t.Fatalf("defaultEntry: %v", err)
+		t.Fatalf("defaultProjects: %v", err)
 	}
+	if len(layers) != 1 {
+		t.Fatalf("layers = %v, want one", layers)
+	}
+	entries, only := layers[0].entries(), layers[0].Only
 	if len(entries) != 1 || entries[0] != "warden" {
 		t.Fatalf("entries = %v, want [warden]", entries)
 	}
@@ -187,7 +191,7 @@ func TestDefaultEntryFromProjectFile(t *testing.T) {
 
 // include names the global entries a repository also needs. They resolve
 // before the project's own entry, so the project wins on a shared variable.
-func TestDefaultEntryIncludesResolveFirst(t *testing.T) {
+func TestDefaultProjectsIncludesResolveFirst(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, vault.ProjectFileName)
 	if err := writeFileString(path, "include = [\"openai\", \"agents\"]\nentry = \"warden\"\n"); err != nil {
@@ -203,10 +207,14 @@ func TestDefaultEntryIncludesResolveFirst(t *testing.T) {
 		t.Fatalf("approve: %v", err)
 	}
 
-	entries, _, err := newApp().defaultEntry()
+	layers, err := newApp().defaultProjects()
 	if err != nil {
-		t.Fatalf("defaultEntry: %v", err)
+		t.Fatalf("defaultProjects: %v", err)
 	}
+	if len(layers) != 1 {
+		t.Fatalf("layers = %v, want one", layers)
+	}
+	entries := layers[0].entries()
 	want := []string{"openai", "agents", "warden"}
 	if len(entries) != 3 {
 		t.Fatalf("entries = %v, want %v", entries, want)
@@ -230,7 +238,7 @@ func TestProjectIncludeRefusesABinding(t *testing.T) {
 	}
 }
 
-func TestDefaultEntryRequiresApproval(t *testing.T) {
+func TestDefaultProjectsRequiresApproval(t *testing.T) {
 	dir := t.TempDir()
 	if err := writeFileString(filepath.Join(dir, vault.ProjectFileName), "entry = \"warden\"\n"); err != nil {
 		t.Fatal(err)
@@ -238,12 +246,12 @@ func TestDefaultEntryRequiresApproval(t *testing.T) {
 	t.Chdir(dir)
 	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 
-	if _, _, err := newApp().defaultEntry(); err == nil {
+	if _, err := newApp().defaultProjects(); err == nil {
 		t.Fatal("expected an unapproved project file to be refused")
 	}
 }
 
-func TestDefaultEntryApprovalRevokedByEdit(t *testing.T) {
+func TestDefaultProjectsApprovalRevokedByEdit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, vault.ProjectFileName)
 	if err := writeFileString(path, "entry = \"warden\"\n"); err != nil {
@@ -263,7 +271,7 @@ func TestDefaultEntryApprovalRevokedByEdit(t *testing.T) {
 	if err := writeFileString(path, "entry = \"aws-prod\"\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := newApp().defaultEntry(); err == nil {
+	if _, err := newApp().defaultProjects(); err == nil {
 		t.Fatal("expected an edited project file to require re-approval")
 	}
 }

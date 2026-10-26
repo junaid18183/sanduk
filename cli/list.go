@@ -3,6 +3,9 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"path/filepath"
+	"sort"
 	"text/tabwriter"
 	"time"
 
@@ -62,33 +65,46 @@ func newListCmd(a *app) *cobra.Command {
 				return err
 			}
 
-			projPath, projEntry, why := a.projectScope(cfg)
+			layers, why := a.projectChain(cfg)
 			if why != nil {
 				a.warnf("note: %v\n", why)
-				if projEntry == "" {
-					a.warnf("listing global entries only\n")
+			}
+			unusable := a.warnUntrusted(layers)
+			if (why != nil || unusable > 0) && !anyTrusted(layers) {
+				a.warnf("listing global entries only\n")
+			}
+			// A layer's directory is what claims its entry, whether or not
+			// the entry is a group with a location recorded for it.
+			projects := cfg.GroupLocations()
+			for _, l := range layers {
+				if l.Trusted {
+					projects[l.Entry] = l.Dir
 				}
 			}
-			entries := vault.ScopeEntries(names, cfg, cfg.GroupLocations(), projEntry)
+			entries := vault.ScopeEntries(names, cfg, projects, currentEntries(layers))
+
+			// The project block is the point of the default view, so it is
+			// built whenever the working directory has a chain in scope.
+			var block *projectBlock
+			if anyTrusted(layers) && (scope == "" || scope == vault.ScopeProject) {
+				block, err = a.projectBlockFor(v, cfg, layers, noKeys)
+				if err != nil {
+					return err
+				}
+			}
 
 			var shown []vault.Scoped
 			hidden := map[string]int{}
 			for _, e := range entries {
-				if visibleInScope(e, scope) {
+				if visibleInScope(e, scope, block != nil) {
 					shown = append(shown, e)
 					continue
 				}
-				hidden[e.Scope]++
-			}
-
-			// The project block is the point of the default view, so it is
-			// built whenever the current repository has one in scope.
-			var block *projectBlock
-			if projEntry != "" && (scope == "" || scope == vault.ScopeProject) {
-				block, err = a.projectBlockFor(v, cfg, projPath, projEntry, noKeys)
-				if err != nil {
-					return err
+				// An entry the block above already shows is not hidden.
+				if block != nil && e.Current {
+					continue
 				}
+				hidden[e.Scope]++
 			}
 
 			switch {
@@ -121,15 +137,22 @@ func newListCmd(a *app) *cobra.Command {
 	return cmd
 }
 
-// visibleInScope reports whether a classified entry belongs in the table. The
-// default view is global entries only: the project's own entry is shown above
-// the table rather than repeated inside it.
-func visibleInScope(e vault.Scoped, scope string) bool {
+// visibleInScope reports whether a classified entry belongs in the table.
+//
+// The default view answers "what applies where I am standing". Inside a
+// project that is the chain, shown above the table, and the table itself is
+// empty: the vault's global entries are a different question, and printing
+// them underneath buries the three keys the directory actually uses. Outside
+// any project there is no chain to show, so the globals are the answer.
+//
+// Nothing is lost silently either way — reportHidden always says how many
+// entries the filter left out, and --all or --scope global shows them.
+func visibleInScope(e vault.Scoped, scope string, inProject bool) bool {
 	switch scope {
 	case scopeAll:
 		return true
 	case "":
-		return e.Scope == vault.ScopeGlobal
+		return e.Scope == vault.ScopeGlobal && !inProject
 	default:
 		return e.Scope == scope && !e.Current
 	}
@@ -155,59 +178,120 @@ func (a *app) reportHidden(hidden map[string]int) {
 		total, joinComma(parts))
 }
 
-// projectBlock is the repository's own entry, expanded into the variables it
-// provides. Values are never read: keys carries names and link targets only.
+// projectBlock is the chain of project layers that claims the working
+// directory, expanded into the variables they provide. Values are never read:
+// keys carries names, link targets and which entry each name came from.
 type projectBlock struct {
-	Path  string
-	Entry string
-	Type  string
-	Keys  []projectKey
+	Layers []projectLayer
+	Dir    string
+	Keys   []projectKey
 }
 
-// projectKey is one variable an entry provides. LinkedTo is the flat secret
-// the value is read from, empty when the entry stores it.
+// projectKey is one variable the chain provides. From names the entry whose
+// value wins, LinkedTo the flat secret that entry reads it from, and Shadows
+// the entries an earlier layer would have provided it from.
 type projectKey struct {
-	Name     string `json:"name"`
-	LinkedTo string `json:"linked_to,omitempty"`
+	Name     string   `json:"name"`
+	From     string   `json:"from"`
+	LinkedTo string   `json:"linked_to,omitempty"`
+	Shadows  []string `json:"shadows,omitempty"`
 }
 
-// projectBlockFor reads the project entry's variable names. It is the one read
-// a listing makes, and it is skipped entirely with --no-keys or when the entry
-// named by the project file does not exist yet.
-func (a *app) projectBlockFor(v *vault.Vault, cfg *vault.Config, path, entry string, noKeys bool) (*projectBlock, error) {
-	b := &projectBlock{Path: path, Entry: entry, Type: kindOf(cfg, entry)}
+// projectBlockFor reads the variable names each layer provides, and works out
+// which layer wins each one.
+//
+// This is the only read a listing makes. A single-layer project opens one
+// entry, as before; a chain opens the entries it resolves, which on a
+// presence-gated backend is one prompt per distinct entry — hence the cache,
+// and hence --no-keys, which skips the reads altogether. No value is read,
+// and an untrusted layer is never opened: it injects nothing, so reporting
+// its keys would describe a run that cannot happen.
+func (a *app) projectBlockFor(v *vault.Vault, cfg *vault.Config, layers []projectLayer, noKeys bool) (*projectBlock, error) {
+	b := &projectBlock{Layers: layers, Dir: innermostDir(layers)}
 	if noKeys {
 		return b, nil
 	}
-	vars, err := v.Variables(entry, cfg)
-	if err != nil {
-		// A project file naming an entry that is not stored yet is a normal
-		// state in a fresh clone; say so instead of failing the listing.
-		a.warnf("note: %s names entry %q: %v\n", vault.ProjectFileName, entry, err)
-		return b, nil
+
+	seen := map[string]int{} // variable name -> index in b.Keys
+	cache := map[string]*vault.Variables{}
+	for _, l := range layers {
+		if !l.Trusted {
+			continue
+		}
+		for _, entry := range l.entries() {
+			vars, ok := cache[entry]
+			if !ok {
+				got, err := v.Variables(entry, cfg)
+				if err != nil {
+					// A project file naming an entry that is not stored yet
+					// is a normal state in a fresh clone; say so instead of
+					// failing the listing.
+					a.warnf("note: %s names entry %q: %v\n",
+						filepath.Join(l.Dir, vault.ProjectFileName), entry, err)
+					cache[entry] = &vault.Variables{}
+					continue
+				}
+				vars, cache[entry] = got, got
+			}
+			for _, n := range vars.Names {
+				k := projectKey{Name: n, From: entry, LinkedTo: vars.Links[n]}
+				i, dup := seen[n]
+				if !dup {
+					seen[n] = len(b.Keys)
+					b.Keys = append(b.Keys, k)
+					continue
+				}
+				// A nearer layer wins, and says what it displaced: which
+				// GITHUB_TOKEN you get is the question a chain raises.
+				k.Shadows = append(b.Keys[i].Shadows, b.Keys[i].From)
+				b.Keys[i] = k
+			}
+		}
 	}
-	b.Type = vars.Type
-	for _, n := range vars.Names {
-		b.Keys = append(b.Keys, projectKey{Name: n, LinkedTo: vars.Links[n]})
-	}
+	sort.Slice(b.Keys, func(i, j int) bool { return b.Keys[i].Name < b.Keys[j].Name })
 	return b, nil
+}
+
+// anyTrusted reports whether any layer is approved.
+//
+// A chain of nothing but unapproved files claims nothing: it must not narrow
+// the listing, or a repository could hide the rest of the vault from you
+// simply by committing a file. The note on stderr says why, and the globals
+// are listed as if the file were not there.
+func anyTrusted(layers []projectLayer) bool {
+	for _, l := range layers {
+		if l.Trusted {
+			return true
+		}
+	}
+	return false
+}
+
+// kindNote renders a layer's type and anything the reader has to know about
+// it before trusting what the keys below say.
+func kindNote(cfg *vault.Config, l projectLayer) string {
+	out := kindOf(cfg, l.Entry)
+	switch {
+	case !l.Trusted:
+		out += "  (not approved; not applied)"
+	case l.FromLocation:
+		out += "  (your local record, not " + vault.ProjectFileName + ")"
+	}
+	if len(l.Include) > 0 {
+		out += "  (+" + joinComma(l.Include) + ")"
+	}
+	return out
 }
 
 func printListTable(cmd *cobra.Command, cfg *vault.Config, block *projectBlock, shown []vault.Scoped, withScope bool) error {
 	out := cmd.OutOrStdout()
 	if block != nil {
-		fmt.Fprintf(out, "PROJECT  %s (%s)  %s\n", block.Entry, block.Type, block.Path)
-		if len(block.Keys) > 0 {
-			tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "KEY\tSOURCE")
-			for _, k := range block.Keys {
-				fmt.Fprintf(tw, "%s\t%s\n", k.Name, keySource(k))
-			}
-			if err := tw.Flush(); err != nil {
-				return err
-			}
+		if err := printProjectBlock(out, cfg, block); err != nil {
+			return err
 		}
-		fmt.Fprintln(out)
+	}
+	if len(shown) == 0 && block != nil {
+		return nil
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
@@ -228,11 +312,21 @@ func printListTable(cmd *cobra.Command, cfg *vault.Config, block *projectBlock, 
 }
 
 func printListJSON(cmd *cobra.Command, cfg *vault.Config, block *projectBlock, shown []vault.Scoped, hidden map[string]int) error {
+	type layerRow struct {
+		Dir     string   `json:"dir"`
+		Entry   string   `json:"entry"`
+		Type    string   `json:"type"`
+		Include []string `json:"include,omitempty"`
+		Only    []string `json:"only,omitempty"`
+		Trusted bool     `json:"trusted"`
+		// Location marks a layer that came from your own config rather than
+		// from a project file, so a reader can tell what a clone would see.
+		Location bool `json:"location,omitempty"`
+	}
 	type projectRow struct {
-		Path  string       `json:"path"`
-		Entry string       `json:"entry"`
-		Type  string       `json:"type"`
-		Keys  []projectKey `json:"keys,omitempty"`
+		Dir    string       `json:"dir"`
+		Layers []layerRow   `json:"layers"`
+		Keys   []projectKey `json:"keys,omitempty"`
 	}
 	type entryRow struct {
 		Name   string   `json:"name"`
@@ -248,9 +342,15 @@ func printListJSON(cmd *cobra.Command, cfg *vault.Config, block *projectBlock, s
 	}{Entries: []entryRow{}}
 
 	if block != nil {
-		doc.Project = &projectRow{
-			Path: block.Path, Entry: block.Entry, Type: block.Type, Keys: block.Keys,
+		row := &projectRow{Dir: block.Dir, Layers: []layerRow{}, Keys: block.Keys}
+		for _, l := range block.Layers {
+			row.Layers = append(row.Layers, layerRow{
+				Dir: l.Dir, Entry: l.Entry, Type: kindOf(cfg, l.Entry),
+				Include: l.Include, Only: l.Only,
+				Trusted: l.Trusted, Location: l.FromLocation,
+			})
 		}
+		doc.Project = row
 	}
 	for _, e := range shown {
 		typ, info := describe(cfg, e.Name)
@@ -267,12 +367,64 @@ func printListJSON(cmd *cobra.Command, cfg *vault.Config, block *projectBlock, s
 	return enc.Encode(doc)
 }
 
-// keySource renders the SOURCE column of the project block.
-func keySource(k projectKey) string {
-	if k.LinkedTo != "" {
-		return "-> " + k.LinkedTo
+// printProjectBlock renders the chain and the variables it provides.
+//
+// One layer is the common case and prints as it always has. More than one and
+// the layers are listed in resolution order, with a FROM column on the keys:
+// with two directories both providing GITHUB_TOKEN, the only thing worth
+// printing is which one you actually get.
+func printProjectBlock(out io.Writer, cfg *vault.Config, block *projectBlock) error {
+	single := len(block.Layers) == 1
+	if single {
+		l := block.Layers[0]
+		fmt.Fprintf(out, "PROJECT  %s (%s)  %s\n", l.Entry, kindNote(cfg, l), shortPath(l.Dir))
+	} else {
+		fmt.Fprintf(out, "PROJECT  %s\n", shortPath(block.Dir))
+		tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "ENTRY\tFROM\tTYPE")
+		paths := layerPaths(block.Layers)
+		for i, l := range block.Layers {
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", l.Entry, paths[i], kindNote(cfg, l))
+		}
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+		fmt.Fprintln(out)
 	}
-	return "stored"
+
+	if len(block.Keys) > 0 {
+		tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+		if single {
+			fmt.Fprintln(tw, "KEY\tSOURCE")
+		} else {
+			fmt.Fprintln(tw, "KEY\tFROM\tSOURCE")
+		}
+		for _, k := range block.Keys {
+			if single {
+				fmt.Fprintf(tw, "%s\t%s\n", k.Name, keySource(k))
+				continue
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", k.Name, k.From, keySource(k))
+		}
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintln(out)
+	return nil
+}
+
+// keySource renders the SOURCE column of the project block: where the value
+// comes from, and what providing it displaced.
+func keySource(k projectKey) string {
+	out := "stored"
+	if k.LinkedTo != "" {
+		out = "-> " + k.LinkedTo
+	}
+	if len(k.Shadows) > 0 {
+		out += "  (shadows " + joinComma(k.Shadows) + ")"
+	}
+	return out
 }
 
 // scopeLabel renders an entry's scope, naming what claims it.

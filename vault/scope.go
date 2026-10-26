@@ -21,26 +21,35 @@ type Scoped struct {
 	// Owners is what claimed the entry: the directory it belongs to for
 	// ScopeProject, the groups linking to it for ScopeMember, nil otherwise.
 	Owners []string
-	// Current marks the entry the working directory itself resolves to, as
-	// opposed to one belonging to a project elsewhere.
+	// Current marks an entry the working directory itself resolves to — any
+	// layer of its project chain — as opposed to one belonging to a project
+	// elsewhere.
 	Current bool
 }
 
 // ScopeEntries classifies names for display.
 //
 // projects maps an entry name to the directory it belongs to, as recorded by
-// GroupLocations; current is the entry the working directory resolves to, or
-// "" when it belongs to none. Membership comes from the config's linked_by
-// hints, so classification reads no values and opens no backend entry: a
-// listing stays as cheap as it is today.
+// GroupLocations; current lists the entries the working directory resolves
+// to — every layer of its project chain, not just the nearest, since all of
+// them inject here. Membership comes from the config's linked_by hints, so
+// classification reads no values and opens no backend entry: a listing stays
+// as cheap as it is today.
 //
 // Names are returned in the order given.
-func ScopeEntries(names []string, c *Config, projects map[string]string, current string) []Scoped {
+func ScopeEntries(names []string, c *Config, projects map[string]string, current []string) []Scoped {
+	here := make(map[string]bool, len(current))
+	for _, n := range current {
+		if n != "" {
+			here[n] = true
+		}
+	}
+
 	out := make([]Scoped, 0, len(names))
 	for _, name := range names {
 		s := Scoped{Name: name, Scope: ScopeGlobal}
 		switch {
-		case name != "" && name == current:
+		case here[name]:
 			s.Scope, s.Current = ScopeProject, true
 			if p, ok := projects[name]; ok {
 				s.Owners = []string{p}

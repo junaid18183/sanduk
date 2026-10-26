@@ -37,12 +37,13 @@ const exitDrift = 3
 
 func newDoctorCmd(a *app) *cobra.Command {
 	var (
-		template string
-		metadata bool
-		links    bool
-		expiry   bool
-		within   int
-		fix      bool
+		template  string
+		metadata  bool
+		links     bool
+		expiry    bool
+		showChain bool
+		within    int
+		fix       bool
 	)
 
 	cmd := &cobra.Command{
@@ -65,11 +66,27 @@ func newDoctorCmd(a *app) *cobra.Command {
 			"rewrites the linked_by hints list uses to group related entries.\n\n" +
 			"--expiry lists the entries carrying a rotation deadline, soonest first, and\n" +
 			"exits 3 if any has passed or falls due within --within days (default 14).\n" +
-			"It reads metadata only: no value is decrypted, so it is safe in CI.",
+			"It reads metadata only: no value is decrypted, so it is safe in CI.\n\n" +
+			"--chain reports the " + vault.ProjectFileName + " files that apply here, outermost\n" +
+			"first, and which variable each one provides. A file above this directory is\n" +
+			"not in the repository, so what it contributes is there on this machine and\n" +
+			"nowhere else: the report marks those variables, because a clone or a CI job\n" +
+			"running the same command will not have them. Set inherit = false to depend\n" +
+			"on this directory's file alone. It exits 3 if a layer is not approved.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if n := boolCount(metadata, links, expiry); n > 1 {
-				return fmt.Errorf("--metadata, --links and --expiry are separate checks; run one at a time")
+			if n := boolCount(metadata, links, expiry, showChain); n > 1 {
+				return fmt.Errorf("--metadata, --links, --expiry and --chain are separate checks; " +
+					"run one at a time")
+			}
+			if showChain {
+				if len(args) > 0 {
+					return fmt.Errorf("--chain checks this directory; it takes no entry")
+				}
+				if fix {
+					return fmt.Errorf("--fix applies to --metadata; approve a layer with \"sanduk allow\"")
+				}
+				return a.doctorChain(cmd)
 			}
 			if expiry {
 				if len(args) > 0 {
@@ -112,7 +129,7 @@ func newDoctorCmd(a *app) *cobra.Command {
 				}
 				// The same approval exec and export require: an unapproved
 				// repository must not choose which entry sanduk reads.
-				if err := a.requireTrustedProject(projPath, proj); err != nil {
+				if err := a.requireTrustedProject(proj); err != nil {
 					return err
 				}
 				entry = proj.Entry
@@ -208,6 +225,8 @@ func newDoctorCmd(a *app) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&metadata, "metadata", false, "check the metadata config against the vault instead")
+	cmd.Flags().BoolVar(&showChain, "chain", false,
+		"report the "+vault.ProjectFileName+" files that apply here and what each contributes")
 	cmd.Flags().BoolVar(&links, "links", false, "check every group link resolves to a flat secret")
 	cmd.Flags().BoolVar(&expiry, "expiry", false, "report entries whose rotation deadline has passed or is near")
 	cmd.Flags().IntVar(&within, "within", 14, "with --expiry, how many days ahead counts as due")
@@ -400,6 +419,92 @@ func (a *app) doctorLinks(cmd *cobra.Command, fix bool) error {
 		return nil
 	}
 	return &vault.ExitError{Code: exitDrift, Err: fmt.Errorf("%d dangling link(s) of %d", dangling, len(rows))}
+}
+
+// doctorChain reports the project chain that applies here: which layers are
+// approved, which variable each provides, and which of them come from above
+// this directory.
+//
+// That last column is the honest cost of inheritance. A file above the
+// repository root is not in the clone, so "sanduk exec -- ./deploy" can work
+// on this machine and fail in CI with no local sign of why. Naming those
+// variables is better than discovering them in a red build.
+func (a *app) doctorChain(cmd *cobra.Command) error {
+	cfg, err := a.loadConfig()
+	if err != nil {
+		return err
+	}
+	layers, why := a.projectChain(cfg)
+	if why != nil {
+		return why
+	}
+	if len(layers) == 0 {
+		return fmt.Errorf("no %s in this directory or its parents", vault.ProjectFileName)
+	}
+	unapproved := a.warnUntrusted(layers)
+
+	v, err := a.openVault()
+	if err != nil {
+		return err
+	}
+	block, err := a.projectBlockFor(v, cfg, layers, false)
+	if err != nil {
+		return err
+	}
+
+	out := cmd.OutOrStdout()
+	tw := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(tw, "ENTRY\tFROM\tSTATUS")
+	paths := layerPaths(layers)
+	for i, l := range layers {
+		status := "applies here"
+		switch {
+		case !l.Trusted:
+			status = "NOT APPROVED (contributes nothing)"
+		case l.Dir != block.Dir:
+			status = "outside this directory"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", l.Entry, paths[i], status)
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+
+	// Which layer each winning variable came from, so the ones that do not
+	// travel with the repository can be named.
+	entryDir := map[string]string{}
+	for _, l := range layers {
+		if !l.Trusted {
+			continue
+		}
+		for _, e := range l.entries() {
+			entryDir[e] = l.Dir
+		}
+	}
+	var outside []string
+	for _, k := range block.Keys {
+		if entryDir[k.From] != block.Dir {
+			outside = append(outside, k.Name)
+		}
+	}
+
+	if len(outside) > 0 {
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "%d variable(s) come from outside %s, so a clone or CI will not have them:\n",
+			len(outside), shortPath(block.Dir))
+		for _, k := range outside {
+			fmt.Fprintf(out, "  %s\n", k)
+		}
+	}
+
+	if unapproved > 0 {
+		return &vault.ExitError{
+			Code: exitDrift,
+			Err:  fmt.Errorf("%d layer(s) of %d are not approved", unapproved, len(layers)),
+		}
+	}
+	a.warnf("%d layer(s) resolve, %d variable(s)\n", len(layers), len(block.Keys))
+	return nil
 }
 
 // boolCount counts the set flags among several mutually exclusive modes.

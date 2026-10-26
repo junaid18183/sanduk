@@ -276,9 +276,15 @@ func (a *app) mcpListEntries() (map[string]any, error) {
 	// The scope each entry is in, so the agent can tell this repository's
 	// secrets from every other repository's. A project file that is not
 	// approved narrows nothing, exactly as for the CLI.
-	_, current, _ := a.projectScope(cfg)
+	layers, _ := a.projectChain(cfg)
+	projects := cfg.GroupLocations()
+	for _, l := range layers {
+		if l.Trusted {
+			projects[l.Entry] = l.Dir
+		}
+	}
 	scopes := make(map[string]vault.Scoped, len(names))
-	for _, s := range vault.ScopeEntries(names, cfg, cfg.GroupLocations(), current) {
+	for _, s := range vault.ScopeEntries(names, cfg, projects, currentEntries(layers)) {
 		scopes[s.Name] = s
 	}
 
