@@ -140,3 +140,115 @@ func TestReplaceOnlyHandlesMultilineAndAbsentLists(t *testing.T) {
 		t.Fatal("readonly is not only")
 	}
 }
+
+// A chain is every project file above a directory, outermost first: the order
+// they resolve in, so the nearest one wins.
+func TestLoadProjectChain(t *testing.T) {
+	root := t.TempDir()
+	mid := filepath.Join(root, "acme")
+	leaf := filepath.Join(mid, "bidops")
+	if err := os.MkdirAll(leaf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for dir, body := range map[string]string{
+		root: "entry = \"code\"\n",
+		mid:  "entry = \"acme\"\n",
+		leaf: "entry = \"bidops\"\ninclude = [\"openai\"]\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, ProjectFileName), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	chain, err := LoadProjectChain(leaf)
+	if err != nil {
+		t.Fatalf("chain: %v", err)
+	}
+	want := []string{"code", "acme", "bidops"}
+	if len(chain) != len(want) {
+		t.Fatalf("chain = %d files, want %v", len(chain), want)
+	}
+	for i, n := range want {
+		if chain[i].Entry != n {
+			t.Fatalf("chain = %v, want %v outermost first", entryNames(chain), want)
+		}
+		if !chain[i].Inherits() {
+			t.Fatalf("%s should inherit by default", n)
+		}
+	}
+	if chain[2].Dir() != leaf {
+		t.Fatalf("Dir() = %q, want %q", chain[2].Dir(), leaf)
+	}
+
+	// The nearest file alone is still what LoadProject returns.
+	_, proj, err := LoadProject(leaf)
+	if err != nil || proj == nil || proj.Entry != "bidops" {
+		t.Fatalf("LoadProject = %+v, %v", proj, err)
+	}
+}
+
+// inherit = false stops the walk at the file that sets it — the file itself
+// still applies, nothing above it does.
+func TestLoadProjectChainSeals(t *testing.T) {
+	root := t.TempDir()
+	mid := filepath.Join(root, "acme")
+	leaf := filepath.Join(mid, "bidops")
+	if err := os.MkdirAll(leaf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for dir, body := range map[string]string{
+		root: "entry = \"code\"\n",
+		mid:  "entry = \"acme\"\ninherit = false\n",
+		leaf: "entry = \"bidops\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, ProjectFileName), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	chain, err := LoadProjectChain(leaf)
+	if err != nil {
+		t.Fatalf("chain: %v", err)
+	}
+	if got := entryNames(chain); len(got) != 2 || got[0] != "acme" || got[1] != "bidops" {
+		t.Fatalf("chain = %v, want [acme bidops]: the seal keeps its own file", got)
+	}
+}
+
+// No project file anywhere above is a normal state, not an error.
+func TestLoadProjectChainEmpty(t *testing.T) {
+	chain, err := LoadProjectChain(t.TempDir())
+	if err != nil {
+		t.Fatalf("chain: %v", err)
+	}
+	if len(chain) != 0 {
+		t.Fatalf("chain = %v, want none", entryNames(chain))
+	}
+}
+
+// A file that exists but does not parse must stop the walk: skipping it would
+// resolve something other than what the directory asked for.
+func TestLoadProjectChainRefusesABrokenLayer(t *testing.T) {
+	root := t.TempDir()
+	leaf := filepath.Join(root, "repo")
+	if err := os.MkdirAll(leaf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ProjectFileName), []byte("entry = \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leaf, ProjectFileName), []byte("entry = \"repo\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadProjectChain(leaf); err == nil {
+		t.Fatal("expected an unparseable layer to be an error")
+	}
+}
+
+func entryNames(chain []*Project) []string {
+	out := make([]string, 0, len(chain))
+	for _, p := range chain {
+		out = append(out, p.Entry)
+	}
+	return out
+}

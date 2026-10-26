@@ -29,10 +29,12 @@ cli/                    cobra commands, registered in cli/root.go; thin, no doma
   get.go                get (redacted unless --reveal) and the field printer group get shares
   exec.go, export.go    run a command with secrets / print them for scripts
   selector.go           the selection pipeline exec and export share (selectors, --only, --except)
-  project.go            resolves the approved .sanduk.toml into a default entry; projectScope
-                        (the display-only variant) and adoptProject (add-group's project wiring)
+  project.go            resolves the approved .sanduk.toml chain into default entries
+                        (defaultProjects); projectChain (the display-only variant),
+                        layerPaths and adoptProject (add-group's project wiring)
   allow.go              approve a repository's .sanduk.toml
-  doctor.go             group vs .env.example, --metadata drift, --links dangling links, --expiry deadlines
+  doctor.go             group vs .env.example, --metadata drift, --links dangling links,
+                        --expiry deadlines, --chain the project chain and what is not portable
   import.go             bulk import from a .env file, a CSV export or a .1pux archive
   scan.go               search the tree/git/shell history for values that escaped the vault
   mcp.go                read-only MCP server: entry metadata for an agent, never a value
@@ -48,7 +50,8 @@ vault/                  all domain logic; no cobra imports here
   options.go            Options and Open: everything the vault needs, passed in explicitly
   entry.go              Secret/Group/File entry types and validation
   config.go             metadata config (config.toml), UpdateConfig (locked), MetadataDrift, expiry dates
-  project.go            .sanduk.toml discovery and parsing (keeps the parsed bytes' hash)
+  project.go            .sanduk.toml discovery and parsing (keeps the parsed bytes' hash);
+                        LoadProjectChain walks the whole ancestry, inherit = false seals
   project_unix.go       owner/mode checks for project files and private files (no-op on Windows)
   trust.go              the per-user project-approval store (trusted.toml)
   scope.go              ScopeEntries: classifies entries project/member/global for listings
@@ -168,10 +171,13 @@ Break these and you break the tool's security model:
    the list path is a regression. (The age backend's `Keys()` decrypts its single
    document to list names; that is the backend's business, and the values are
    never returned or printed. `doctor --metadata` reads values only under
-   `--fix`, to learn an untracked entry's type.) The one entry a listing opens
-   is the current project's, via `Vault.Variables`, and only for its variable
-   **names** — one read, so one prompt on a presence-gated backend, and
-   `--no-keys` skips even that. Classification itself (`vault.ScopeEntries`)
+   `--fix`, to learn an untracked entry's type.) The only entries a listing
+   opens are the ones the working directory's project chain resolves, via
+   `Vault.Variables`, and only for their variable **names** — each at most
+   once (`projectBlockFor` caches), so a presence-gated backend prompts once
+   per distinct entry, and `--no-keys` skips every read. An untrusted layer
+   is never opened: it injects nothing, so reporting its keys would describe
+   a run that cannot happen. Classification itself (`vault.ScopeEntries`)
    reads nothing: it works from `GroupLocations` and the `linked_by` hints.
 3. **Secret values are never accepted as command-line arguments** (argv is
    visible in process listings). Input comes from an echo-off prompt, `--from-env`,
@@ -210,16 +216,24 @@ Break these and you break the tool's security model:
    (`only`) — names, nothing more. `include` takes entry names, not exec's
    `ENVVAR=entry` bindings. There is deliberately no config.toml setting that
    injects entries everywhere: a repository asks for what it needs, in a file
-   that is reviewed and approved as a whole.
+   that is reviewed and approved as a whole. A file applies to its directory
+   and everything below it, so the files nest (`LoadProjectChain`); `inherit
+   = false` seals a directory, and the walk stops at that file, including it.
+   What a layer above the repository root contributes is not in the clone, so
+   `doctor --chain` names those variables rather than letting CI find them.
 10. **Selectors resolve left to right and the last one wins**, in both `exec` and
     `export`; an entry name resolves through its own mapping, and `ENVVAR=entry`
     binds one flat secret. `--only` filters the merged result and errors on an
     unknown key rather than silently injecting nothing. A project file resolves
-    its `include` entries first and its own `entry` last, by the same rule.
-    Its `only` narrows that last entry alone (`resolveProject`): the list
+    its `include` entries first and its own `entry` last, by the same rule,
+    and a chain of project files resolves outermost directory first, so the
+    nearest directory wins (`resolveProjects`).
+    A file's `only` narrows its own entry alone: the list
     tracks the project's group and sanduk keeps it in step, so filtering the
-    includes with it would silently drop every variable they contribute. The
-    `--only` flag is one explicit request and still narrows everything.
+    includes with it would silently drop every variable they contribute — and
+    narrowing the layers underneath would let a repository silently delete
+    what the directories above it share. The `--only` flag is one explicit
+    request and still narrows everything, replacing every layer's list.
 11. **A dedicated keychain is opt-in.** `--keychain` / `SANDUK_KEYCHAIN` accepts a
     name, never a path (`keychainTarget()` rejects separators). The default stays
     `login`; see the README for why a second keychain is not automatically safer.
@@ -239,9 +253,16 @@ Break these and you break the tool's security model:
     `SANDUK_KEYCHAIN_PASSPHRASE` each unlock the whole vault; leaking one would
     defeat `--only`. Overrides may still set any name (that is an explicit
     injection), and the output order is sorted, not map-ordered.
-14. **`.sanduk.toml` is untrusted until approved.** `defaultEntry` refuses a
+14. **`.sanduk.toml` is untrusted until approved.** `defaultProjects` refuses a
     project file that is not in the trust store with a matching content hash, so
     a cloned repository cannot choose which entry `exec`/`export`/`doctor` uses.
+    Every layer of a chain is a separate decision and is approved separately;
+    one unapproved layer fails the command and names the directory
+    (`allowHint`), because resolving the rest would be a run quietly missing a
+    variable. In a listing, which never fails, a chain of nothing but
+    unapproved files must narrow nothing (`anyTrusted`) — otherwise a
+    repository could hide the vault from you by committing a file — and each
+    unapproved layer gets its own note (`warnUntrusted`).
     The hash is of the bytes `LoadProject` parsed (kept on the `Project`), never a
     second read. The store is `trusted.toml` (non-secret, mode 0600); a store
     inside the project, or one readable by group/other, is refused, since
@@ -325,7 +346,11 @@ Break these and you break the tool's security model:
 22. **A scope is a view, never a resolution.** `project`/`member`/`global`
     decide where an entry appears in `list` and `group list`, and nothing
     else; `exec`, `export` and `get` resolve exactly what they resolved
-    before. Ownership of a directory is recorded in **your** config
+    before. Every entry the chain resolves is current, not just the nearest
+    layer's, since all of them inject here. Inside a project the default
+    listing is the chain alone: the globals are a different question, and
+    burying the keys of the directory you are in under them is what the
+    scope exists to prevent. Ownership of a directory is recorded in **your** config
     (`GroupMeta.Location`, written by `add-group` at a repository root and by
     `allow`), never taken from the repository, so no cloned repository can
     claim a group by shipping a file — which is why a location needs no

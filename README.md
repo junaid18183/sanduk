@@ -160,6 +160,32 @@ Links live in the vault entry, not in `config.toml`, so a group stays
 self-contained in the backend: losing or moving the metadata config can never
 change which variables an entry injects.
 
+#### Which way to share
+
+Three mechanisms overlap here, and the one to reach for depends on what you are
+sharing rather than on where it is going:
+
+| You want | Use | Notes |
+| --- | --- | --- |
+| A flat secret in several groups | `sanduk group link <group> <secret>` | Creates the group if it does not exist yet. The secret stays the single source of truth, and drops out of the top-level listing as that group's building block. |
+| A whole global group underneath one repository | `include = ["<entry>"]` in `.sanduk.toml` | Resolved before the project's own entry, so the project wins a variable both provide. Nothing is copied. |
+| The same thing in every repository under a directory | A `.sanduk.toml` in that directory | [Sharing down a directory tree](#sharing-down-a-directory-tree). The nearest directory wins. |
+
+A link may point at a **flat secret only**, so there is no way to take one key
+out of another group:
+
+```sh
+$ sanduk group link bidops opencode
+sanduk: "opencode" is a group; a link must point at a flat secret
+```
+
+That is the model rather than a gap: flat secrets are the shared building
+blocks and groups are the aggregates. If one field of a group turns out to be
+wanted elsewhere, store it as a flat secret and link it from both — which also
+means a single `sanduk rotate` covers every group using it. `include` takes the
+group whole, and a project file's `only` narrows its own entry alone, so it
+cannot be used to thin an include down to one key.
+
 ### Credential files
 
 Some tools will not take a secret in a variable — they want a path to a file: a
@@ -327,6 +353,73 @@ names entries, never values, and the whole file is approved as one — a
 repository cannot widen what it receives without the change showing up in
 `sanduk allow`.
 
+#### Sharing down a directory tree
+
+A project file applies to its directory **and everything below it**, and the
+files nest. Keep all your code under one directory and the layers fall out of
+the layout you already have:
+
+```
+~/work/git/.sanduk.toml                  entry = "code"     GITHUB_TOKEN (personal), AI keys
+~/work/git/acme/.sanduk.toml             entry = "acme"     GITHUB_TOKEN (work)
+~/work/git/acme/bidops/.sanduk.toml      entry = "bidops"   DATABASE_URL, KUBECONFIG
+```
+
+```sh
+$ cd ~/work/git/acme/bidops && sanduk export --format dotenv
+ANTHROPIC_API_KEY=…      # from code
+DATABASE_URL=…           # from bidops
+GITHUB_TOKEN=…           # from acme — the nearer directory wins
+KUBECONFIG=…             # from bidops
+OPENAI_API_KEY=…         # from code
+```
+
+They resolve outermost first, so the nearest directory has the last word: the
+same left-to-right, last-wins rule as `sanduk exec a b c`, applied down the
+tree. Each file's `only` narrows its own entry and nothing else — a
+repository's list must not silently delete what the directories above it
+share. None of the directories has to be a git repository, and `sanduk init`
+works in any of them.
+
+**Every layer is approved separately.** A directory you cloned into can hold a
+project file just as a repository can, so `exec` and `export` refuse the whole
+chain until each file is approved, naming the one to look at:
+
+```sh
+$ sanduk allow
+Approved ~/work/git/acme/bidops/.sanduk.toml
+note: ~/work/git/.sanduk.toml also applies here and is not approved; review it,
+      then run "sanduk allow ~/work/git"
+```
+
+**What a layer above the repository gives you, a clone does not.** Those files
+are not in the repository, so `sanduk exec -- ./deploy` can work on your
+machine and fail in CI. `sanduk doctor --chain` names exactly which variables
+that applies to:
+
+```sh
+$ sanduk doctor --chain
+ENTRY   FROM            STATUS
+code    ~/work/git      outside this directory
+acme    …/acme          outside this directory
+bidops  …/bidops        applies here
+
+4 variable(s) come from outside ~/work/git/acme/bidops, so a clone or CI will not have them:
+  ANTHROPIC_API_KEY
+  GITHUB_TOKEN
+  NPM_TOKEN
+  OPENAI_API_KEY
+```
+
+A repository that must resolve the same way everywhere opts out, and then
+depends on its own file alone:
+
+```toml
+# .sanduk.toml
+entry   = "bidops"
+inherit = false     # ignore every project file above this directory
+```
+
 #### `only` keeps itself current
 
 `only` records the keys the project expects, and `--only` errors on a key the
@@ -397,15 +490,41 @@ groq        secret  GROQ_API_KEY
 sanduk: 14 entry/entries hidden (9 member, 5 project) — see "sanduk list --all"
 ```
 
-Two kinds are left out by default:
+Inside a project that is the whole answer: the chain is shown, and the table
+underneath is left out, because the vault's other entries are a different
+question and printing them buries the keys the directory actually uses. With
+more than one layer the listing says which one wins each variable:
+
+```sh
+$ cd ~/work/git/acme/bidops && sanduk list
+PROJECT  ~/work/git/acme/bidops
+ENTRY   FROM        TYPE
+code    ~/work/git  group
+acme    …/acme      group
+bidops  …/bidops    group
+
+KEY                FROM    SOURCE
+ANTHROPIC_API_KEY  code    stored
+DATABASE_URL       bidops  stored
+GITHUB_TOKEN       acme    stored  (shadows code)
+KUBECONFIG         bidops  stored
+OPENAI_API_KEY     code    stored
+sanduk: 6 entry/entries hidden (4 member, 2 global) — see "sanduk list --all"
+```
+
+Outside any project there is no chain to show, so the global entries are the
+answer, and two kinds are left out:
 
 - **project** — entries that belong to a repository, yours or another one.
-  Inside that repository its entry is shown first instead, expanded into the
-  variables it provides. That expansion opens one entry (never a value, and it
-  may prompt once on a presence-gated backend); `--no-keys` skips it.
 - **member** — flat secrets that a group links to. They are that group's
   building blocks, and they already appear as the `SOURCE` of the variable
   they supply.
+
+Expanding the chain opens the entries it resolves — never a value, and each
+entry at most once, so a presence-gated backend prompts once per entry;
+`--no-keys` skips the reads altogether. An unapproved project file narrows
+nothing: the listing says so and shows the vault as if the file were not
+there.
 
 `--all` shows everything with a `SCOPE` column, and `--scope project|member|global`
 shows one kind. The hidden count always goes to stderr, so a shorter list never
@@ -424,10 +543,13 @@ repository each one serves:
 
 ```sh
 $ sanduk group list
-NAME      LOCATION                  INFO
-warden *  /Users/you/work/warden    Warden staging
-agents    -                         LLM provider keys
+NAME      LOCATION              INFO
+warden *  ~/work/warden         Warden staging
+agents    -                     LLM provider keys
 ```
+
+The groups that apply where you are standing come first, then the directories
+above and below you, then everything else alphabetically.
 
 Use `.envrc` only for interactive work — direnv exports into the shell, so every
 child process of that shell (including an agent) inherits the secrets:
@@ -582,10 +704,10 @@ you want described with `--backend`/`--config` or the `SANDUK_*` variables.
 | `sanduk exec [selector…] -- <cmd>` | Run a command with secrets injected (`--only`, `--except`, `--list`, `--materialize DIR`). |
 | `sanduk export [selector…]` | Emit secrets for scripts (`-f shell\|dotenv\|json`, `--only`, `--except`, `-o FILE`, `--force`, `--materialize DIR`). |
 | `sanduk list` | List the entries in scope: this repository's, plus the global ones (never values; `--all`, `--scope`, `--no-keys`, `--json`, `--names`). An entry with no metadata shows as `unknown`. |
-| `sanduk doctor [entry]` | Check a group against `.env.example` (`--template F`); exits 3 on missing keys. `--metadata [--fix]` checks config.toml against the vault; `--links` checks every group link resolves (`--fix` rebuilds the `linked_by` hints); `--expiry [--within N]` reports rotation deadlines. |
+| `sanduk doctor [entry]` | Check a group against `.env.example` (`--template F`); exits 3 on missing keys. `--metadata [--fix]` checks config.toml against the vault; `--links` checks every group link resolves (`--fix` rebuilds the `linked_by` hints); `--expiry [--within N]` reports rotation deadlines; `--chain` reports the `.sanduk.toml` files that apply here and which variables come from outside this directory. |
 | `sanduk scan [path…]` | Search the tree (`--git`, `--shell`) for stored values that escaped the vault; exits 3 on a find. Reads every value, so it needs `--yes` without a terminal. |
 | `sanduk mcp` | Serve entry metadata to an AI agent over MCP — names only, never values, no execution. |
-| `sanduk allow [dir]` | Approve a repository's `.sanduk.toml` for `exec`/`export`/`doctor`, and record the group's location. |
+| `sanduk allow [dir]` | Approve a repository's `.sanduk.toml` for `exec`/`export`/`doctor`, and record the group's location. Names the files above it that still need approving. |
 | `sanduk remove <name>` | Delete an entry and its metadata (prompts; `--yes` when non-interactive). |
 | `sanduk rotate <name>` | Replace a flat secret's value (`--from-env VAR`, `--from-file F`, or prompt/stdin; `--expires` to move the deadline). |
 | `sanduk import <file>` | Bulk-import a `.env`, CSV export or `.1pux` archive (`--format`, `--group NAME`, `--replace`, `--delete`, `--dry-run`). |
@@ -600,7 +722,8 @@ Global flags, accepted by every command: `--backend`, `--keychain`, `--service`
 Both `exec` and `export` take the same *selectors*: a bare entry name (a group
 contributes one variable per field), or `ENVVAR=entry` to bind a single flat
 secret to a variable. They are merged left to right, and `.sanduk.toml` supplies
-the entry when none is given (after you approve it with `sanduk allow`).
+the entry when none is given (after you approve it with `sanduk allow`) — along
+with the project files in parent directories, outermost first.
 `sanduk exec --list` prints only the variable names that would be injected.
 
 ## How it works
@@ -717,7 +840,7 @@ password the system prompts for. Things worth knowing before you reach for it:
 | `XDG_CONFIG_HOME` / `XDG_DATA_HOME` | Base directories for the config (`…/sanduk/config.toml`) and the age vault (`…/sanduk/`). |
 | `EDITOR` | Editor for `sanduk config --edit` (default `vi`). |
 | `PASSWORD_STORE_DIR` | Read by the `pass` backend, as by `pass` itself. |
-| `.sanduk.toml` (file) | Repository's default entry and optional key subset (approve with `sanduk allow`). |
+| `.sanduk.toml` (file) | Repository's default entry and optional key subset (approve with `sanduk allow`). Files in parent directories apply too, outermost first; `inherit = false` seals a directory. |
 
 The metadata config can also carry standing backend settings. They are defaults
 only, and are resolved last:
@@ -932,6 +1055,11 @@ you stored them with.
 The repository's project file has not been approved, or has changed since. Read
 it, then run `sanduk allow`. Approval is per file contents, so any edit — even
 one you made — needs a fresh `allow`.
+
+The message names the file, which may be in a **parent** directory: project
+files apply to everything below them, and each is approved separately. Pass the
+directory to approve one without changing into it (`sanduk allow ~/work/git`),
+and run `sanduk doctor --chain` to see every layer at once.
 
 ### `could not open the secret-service keystore` (Linux)
 

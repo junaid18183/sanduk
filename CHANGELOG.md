@@ -3,6 +3,62 @@
 sanduk is pre-1.0 (`0.0.x`). A release may change behaviour when that closes a
 security hole; each such change is listed under **Breaking**.
 
+## 0.0.8 — 2026-10-26
+
+Secrets are shared down a directory tree, not just inside one repository: the
+token every checkout of yours uses, the one an organisation's repositories use
+instead, and the repository's own entry are three statements about three
+directories, and sanduk now reads all three.
+
+### Added
+
+- **A `.sanduk.toml` applies to its directory and everything below it.** The
+  files nest: `~/code`, `~/code/acme` and `~/code/acme/bidops` each name an
+  entry, and a command in the repository resolves all three, outermost first,
+  so the nearest directory wins on a variable two of them provide — the same
+  left-to-right rule as `sanduk exec a b c`. Each file's `only` narrows its
+  own entry and nothing else. None of the directories has to be a git
+  repository.
+- **`inherit = false`** seals a directory: the files above it are ignored, so
+  a repository that must resolve the same way in a clone and in CI depends on
+  its own file alone.
+- **`sanduk doctor --chain`** reports the files that apply here, which are
+  approved, and which variables come from *outside* this directory — the ones
+  a clone or a CI job will not have, since those files are not in the
+  repository. Exits 3 when a layer is not approved.
+- **`sanduk list` shows the chain**, with the entry each variable comes from
+  and what it shadows, so "which `GITHUB_TOKEN` do I get here" is answerable
+  by looking.
+- **`sanduk allow` names the files above it** that still need approving, with
+  the command for each, instead of letting you find them one failed command at
+  a time. Each file is still approved on its own.
+
+### Changed
+
+- **Inside a project, `sanduk list` lists the chain and nothing else.** The
+  vault's global entries are a different question, and printing a machine's
+  worth of them under the three keys the directory uses is what the scope was
+  introduced to stop. Outside a project the global table is unchanged. The
+  hidden count still goes to stderr, and `--all` / `--scope global` still show
+  everything.
+- **`sanduk group list` puts the groups that apply where you are standing
+  first**, then the directories above and below you, then the rest
+  alphabetically, and shortens `$HOME` to `~`.
+- An entry is read at most once per command, however many layers include it:
+  on a presence-gated backend that is one prompt, not one per layer.
+
+### Breaking
+
+- **An unapproved project file above the working directory now fails `exec`,
+  `export` and `doctor`**, where before only the nearest file was consulted
+  and the ones above it were never read. Approve each with
+  `sanduk allow <dir>`, or set `inherit = false`. A listing never fails: it
+  says which layer is unapproved and shows the vault as if the file were not
+  there.
+- **`sanduk list --json` replaces `project.entry`/`project.path` with
+  `project.dir` and a `project.layers` array**, and each key now carries
+  `from` and `shadows`.
+
 ## 0.0.7 — 2026-10-26
 
 A vault that is used grows a long tail: entries that belong to one repository,

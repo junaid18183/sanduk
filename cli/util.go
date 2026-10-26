@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/junaid18183/sanduk/vault"
 )
@@ -62,4 +64,21 @@ func readDotenvFile(path string) (map[string]string, error) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return m, nil
+}
+
+// shortPath renders a path for display, with the home directory as "~". The
+// paths in a listing are long and mostly identical prefix; what the reader is
+// looking for is the part that differs.
+func shortPath(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || path == "" {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
+	if strings.HasPrefix(path, home+string(filepath.Separator)) {
+		return "~" + path[len(home):]
+	}
+	return path
 }

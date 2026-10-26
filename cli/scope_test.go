@@ -177,10 +177,26 @@ func TestListScopes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	for _, want := range []string{"PROJECT", "warden", "DB_URL", "OPENAI_API_KEY", "-> openai", "standalone"} {
+	for _, want := range []string{"PROJECT", "warden", "DB_URL", "OPENAI_API_KEY", "-> openai"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list inside the repo lacks %q:\n%s", want, out)
 		}
+	}
+	// Inside a project the question is what applies here, so the vault's
+	// global entries are left for --all and --scope global.
+	if strings.Contains(out, "standalone") {
+		t.Errorf("a global entry should not pad the project view:\n%s", out)
+	}
+	out, err = runCmd(t, "", "list", "--scope", "global")
+	if err != nil {
+		t.Fatalf("list --scope global: %v", err)
+	}
+	if !strings.Contains(out, "standalone") {
+		t.Errorf("--scope global should list it:\n%s", out)
+	}
+	out, err = runCmd(t, "", "list")
+	if err != nil {
+		t.Fatalf("list: %v", err)
 	}
 	// openai is shown as warden's source, not as an entry of its own.
 	if strings.Contains(out, "\nopenai ") {
@@ -222,9 +238,14 @@ func TestListScopes(t *testing.T) {
 	}
 	var doc struct {
 		Project *struct {
-			Entry string `json:"entry"`
-			Keys  []struct {
+			Dir    string `json:"dir"`
+			Layers []struct {
+				Entry   string `json:"entry"`
+				Trusted bool   `json:"trusted"`
+			} `json:"layers"`
+			Keys []struct {
 				Name     string `json:"name"`
+				From     string `json:"from"`
 				LinkedTo string `json:"linked_to"`
 			} `json:"keys"`
 		} `json:"project"`
@@ -234,10 +255,12 @@ func TestListScopes(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatalf("list --json = %q (%v)", out, err)
 	}
-	if doc.Project == nil || doc.Project.Entry != "warden" || len(doc.Project.Keys) != 2 {
+	if doc.Project == nil || len(doc.Project.Layers) != 1 ||
+		doc.Project.Layers[0].Entry != "warden" || len(doc.Project.Keys) != 2 {
 		t.Fatalf("project block = %+v", doc.Project)
 	}
-	if doc.Hidden["member"] != 1 || doc.Hidden["project"] != 1 {
+	// The project's own entry is shown above the table, not hidden from it.
+	if doc.Hidden["member"] != 1 || doc.Hidden["global"] != 1 || doc.Hidden["project"] != 0 {
 		t.Fatalf("hidden counts = %v", doc.Hidden)
 	}
 }

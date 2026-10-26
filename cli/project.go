@@ -5,38 +5,73 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/junaid18183/sanduk/vault"
 )
 
-// defaultEntry resolves the entries a repository injects by default: the
-// entry named by .sanduk.toml, the entries it includes underneath, and its
-// optional key subset. It fails with an actionable message
-// when there is no project file, so commands that can omit the entry say why
-// they cannot.
-//
-// The project file must be approved first. A cloned repository can otherwise
-// commit an entry name of its choosing, and "sanduk exec -- <its scripts>" would
-// hand that entry's secrets to the repository. Approval is a hash of the file's
-// contents, so editing it requires re-approving it.
-func (a *app) defaultEntry() (entries []string, only []string, err error) {
-	path, proj, err := vault.LoadProject(".")
-	if err != nil {
-		return nil, nil, err
-	}
-	if proj == nil {
-		return nil, nil, fmt.Errorf("no entry given and no %s found in this directory or its parents",
-			vault.ProjectFileName)
-	}
-	if err := a.requireTrustedProject(path, proj); err != nil {
-		return nil, nil, err
-	}
-	// Includes first, the project's own entry last: the same order, and the
-	// same last-wins rule, as naming them on the command line.
-	return proj.Entries(), proj.Only, nil
+// projectLayer is one directory of the chain that claims the working
+// directory, as a listing shows it.
+type projectLayer struct {
+	// Dir is the directory the layer speaks for.
+	Dir string
+	// Entry is the entry it names, and Include the entries merged underneath
+	// that one, in resolution order.
+	Entry   string
+	Include []string
+	// Only narrows Entry, never the includes — see resolveProjects.
+	Only []string
+	// Trusted is false for a project file that has not been approved. Such a
+	// layer injects nothing: it is carried so a listing can say why, which
+	// is what Why holds.
+	Trusted bool
+	Why     error
+	// FromLocation marks a layer that came from the group location recorded
+	// in your own config rather than from a project file.
+	FromLocation bool
 }
 
-// projectScope resolves the entry the working directory belongs to, for
+// entries returns what the layer resolves, in order: its includes, then its
+// own entry, which therefore wins on a variable two of them provide.
+func (l projectLayer) entries() []string {
+	out := make([]string, 0, len(l.Include)+1)
+	out = append(out, l.Include...)
+	return append(out, l.Entry)
+}
+
+// defaultProjects resolves the chain of project files that applies to the
+// working directory, outermost first, for a command that was given no entry.
+//
+// Every layer must be approved. A cloned repository can otherwise commit a
+// project file naming an entry of its choosing, and "sanduk exec -- <its
+// scripts>" would hand that entry's secrets to the repository; a file above
+// the repository is no different, since a directory you cloned into can hold
+// one too. An unapproved layer anywhere in the chain fails the command and
+// names the directory to approve, because the alternative — resolving the
+// rest and carrying on — is a run that is quietly missing a variable.
+func (a *app) defaultProjects() ([]projectLayer, error) {
+	chain, err := vault.LoadProjectChain(".")
+	if err != nil {
+		return nil, err
+	}
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("no entry given and no %s found in this directory or its parents",
+			vault.ProjectFileName)
+	}
+	out := make([]projectLayer, 0, len(chain))
+	for _, proj := range chain {
+		if err := a.requireTrustedProject(proj); err != nil {
+			return nil, err
+		}
+		out = append(out, projectLayer{
+			Dir: proj.Dir(), Entry: proj.Entry, Include: proj.Include,
+			Only: proj.Only, Trusted: true,
+		})
+	}
+	return out, nil
+}
+
+// projectChain resolves the layers the working directory belongs to, for
 // display only.
 //
 // Two things can claim a directory, and they are not the same statement:
@@ -48,41 +83,128 @@ func (a *app) defaultEntry() (entries []string, only []string, err error) {
 //     allow into your private config. Nothing a repository ships can forge
 //     it, so it needs no approval — but it does not travel.
 //
-// The approved project file wins, so what a listing shows is what a teammate
-// and CI resolve from the same repository; the recorded location is the
-// fallback, which keeps a group visible in its own directory after
-// add-group --no-project, or when the project file was never committed.
+// The approved project files come first, outermost to nearest, because that
+// is the order they inject in. A recorded location is added underneath them
+// only when it is deeper than every one of them, which keeps a group visible
+// in its own directory after add-group --no-project, or when the project
+// file was never committed.
 //
 // This decides a view and nothing else. exec, export and doctor still resolve
-// their default entry through defaultEntry, from the project file alone, so a
-// location can never make a command inject something a teammate's checkout
-// would not.
+// through defaultProjects, from project files alone, so a location can never
+// make a command inject something a teammate's checkout would not.
 //
-// Unlike defaultEntry this never fails the command: a listing is not an
-// injection, so an unusable project file only costs the narrower view. The
-// reason comes back separately, because a repository that silently failed to
-// narrow the output would read as sanduk ignoring it.
-func (a *app) projectScope(cfg *vault.Config) (origin, entry string, why error) {
-	path, proj, err := vault.LoadProject(".")
-	switch {
-	case err != nil:
+// Unlike defaultProjects this never fails the command: a listing is not an
+// injection, so an unusable or unapproved layer only costs the narrower view.
+// The reason comes back separately, because a repository that silently failed
+// to narrow the output would read as sanduk ignoring it.
+func (a *app) projectChain(cfg *vault.Config) (layers []projectLayer, why error) {
+	chain, err := vault.LoadProjectChain(".")
+	if err != nil {
 		why = err
-	case proj != nil:
-		if terr := a.requireTrustedProject(path, proj); terr != nil {
-			why = terr
-		} else {
-			// The directory, not the file: it is what the reader
-			// recognises, and what a recorded location holds.
-			return filepath.Dir(path), proj.Entry, nil
+	}
+	for _, proj := range chain {
+		l := projectLayer{
+			Dir: proj.Dir(), Entry: proj.Entry, Include: proj.Include,
+			Only: proj.Only, Trusted: true,
+		}
+		if terr := a.requireTrustedProject(proj); terr != nil {
+			l.Trusted, l.Why = false, terr
+		}
+		layers = append(layers, l)
+	}
+
+	// A recorded location is added only where no project file already speaks
+	// for the same directory or a deeper one: with nothing above it that is
+	// the whole view, and underneath a chain it is the nearer statement. A
+	// location further up never displaces the files, which are the portable
+	// claim and the one a teammate's checkout resolves.
+	if name, ok := cfg.GroupAt("."); ok && !claimsEntry(layers, name) {
+		dir := cfg.Groups[name].Location
+		deepest := innermostDir(layers)
+		if deepest == "" || (dir != deepest && withinDir(deepest, dir)) {
+			layers = append(layers, projectLayer{
+				Dir: dir, Entry: name, Trusted: true, FromLocation: true,
+			})
 		}
 	}
-	if name, ok := cfg.GroupAt("."); ok {
-		return cfg.Groups[name].Location, name, why
+	return layers, why
+}
+
+// warnUntrusted says, for every layer that is not approved, what it would
+// have contributed and how to approve it. Each file is a separate decision,
+// so each gets its own line rather than only the first one found.
+func (a *app) warnUntrusted(layers []projectLayer) int {
+	n := 0
+	for _, l := range layers {
+		if l.Why != nil {
+			a.warnf("note: %v\n", l.Why)
+			n++
+		}
 	}
-	if path != "" {
-		path = filepath.Dir(path)
+	return n
+}
+
+// layerPaths renders a chain's directories for a table. The layers nest, so
+// every path after the first repeats the one above it; printing each one in
+// full turns the column into a wall of identical prefix. Only the part that
+// differs is new information.
+func layerPaths(layers []projectLayer) []string {
+	out := make([]string, len(layers))
+	for i, l := range layers {
+		if i == 0 {
+			out[i] = shortPath(l.Dir)
+			continue
+		}
+		rel, err := filepath.Rel(layers[i-1].Dir, l.Dir)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			out[i] = shortPath(l.Dir)
+			continue
+		}
+		out[i] = "…/" + rel
 	}
-	return path, "", why
+	return out
+}
+
+// innermostDir is the directory of the last layer, or "" when there are none.
+func innermostDir(layers []projectLayer) string {
+	if len(layers) == 0 {
+		return ""
+	}
+	return layers[len(layers)-1].Dir
+}
+
+// claimsEntry reports whether a layer already names the entry, so a recorded
+// location never repeats what a project file has already said.
+func claimsEntry(layers []projectLayer, name string) bool {
+	for _, l := range layers {
+		if l.Entry == name {
+			return true
+		}
+	}
+	return false
+}
+
+// withinDir reports whether path is root or lies under it.
+func withinDir(root, path string) bool {
+	if root == "" {
+		return false
+	}
+	if path == root {
+		return true
+	}
+	return strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
+// currentEntries lists every entry the layers resolve, for scope
+// classification: each one injects here, so each is this directory's.
+func currentEntries(layers []projectLayer) []string {
+	var out []string
+	for _, l := range layers {
+		if l.Trusted {
+			out = append(out, l.entries()...)
+		}
+	}
+	return out
 }
 
 // repoRoot returns the nearest repository root at or above dir, and whether
@@ -159,16 +281,29 @@ func (a *app) adoptProject(group, dir string) error {
 
 // requireTrustedProject refuses an unapproved (or edited) project file and tells
 // the user how to approve it.
-func (a *app) requireTrustedProject(path string, proj *vault.Project) error {
+//
+// The hint names the directory, because a file above the working directory is
+// not the one a bare "sanduk allow" would approve.
+func (a *app) requireTrustedProject(proj *vault.Project) error {
 	ok, err := vault.IsProjectTrusted(a.trustPath(), proj)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("%s is not approved; review it, then run \"sanduk allow\" to trust entry %q",
-			path, proj.Entry)
+		return fmt.Errorf("%s is not approved; review it, then run %s to trust entry %q",
+			shortPath(proj.Path()), allowHint(proj.Dir()), proj.Entry)
 	}
 	return nil
+}
+
+// allowHint is the command that approves the project file in dir. "sanduk
+// allow" approves the nearest file at or above the working directory, so a
+// layer further up has to be named.
+func allowHint(dir string) string {
+	if wd, err := os.Getwd(); err == nil && wd == dir {
+		return "\"sanduk allow\""
+	}
+	return "\"sanduk allow " + shortPath(dir) + "\""
 }
 
 // syncProjectOnly keeps a project file's `only` list in step with the group it

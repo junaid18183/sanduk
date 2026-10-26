@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -70,18 +71,16 @@ func (a *app) resolveSelection(sels, only, except []string) (selection, error) {
 		return selection{}, err
 	}
 
+	r := newResolver(v, cfg)
 	if len(sels) == 0 {
-		entries, projOnly, err := a.defaultEntry()
+		layers, err := a.defaultProjects()
 		if err != nil {
 			return selection{}, err
 		}
-		if len(only) == 0 && len(projOnly) > 0 {
-			return resolveProject(v, cfg, entries, projOnly, except)
-		}
-		sels = entries
+		return r.resolveProjects(layers, only, except)
 	}
 
-	sel, err := resolveSelectors(v, cfg, parseSelectors(sels))
+	sel, err := r.resolveSelectors(parseSelectors(sels))
 	if err != nil {
 		return selection{}, err
 	}
@@ -92,32 +91,49 @@ func (a *app) resolveSelection(sels, only, except []string) (selection, error) {
 	return filterExcept(sel, except), nil
 }
 
-// resolveProject resolves what a project file asks for: the entries it
-// includes, merged underneath its own entry, with `only` applied to that
-// entry alone.
+// resolveProjects resolves a project chain: every layer in turn, outermost
+// first, each contributing the entries it includes merged underneath its own
+// entry. A later layer wins on a variable two of them provide, so the nearest
+// directory has the last word — the same left-to-right rule as
+// "sanduk exec a b c", applied down the directory tree.
 //
-// The includes are deliberately not narrowed. `only` lists the keys the
-// project's own group provides, and sanduk keeps it in step with that group
-// — narrowing the includes with it would drop every variable they contribute
-// the moment the list was synced, silently. A file that names a global entry
-// has already said it wants what that entry provides; --only on the command
-// line still narrows everything, because that is one explicit request rather
-// than a list maintained over time.
-func resolveProject(v *vault.Vault, cfg *vault.Config, entries, projOnly, except []string) (selection, error) {
-	last := len(entries) - 1
-	base, err := resolveSelectors(v, cfg, parseSelectors(entries[:last]))
-	if err != nil {
-		return selection{}, err
+// Each layer's `only` narrows that layer's own entry and nothing else. The
+// includes are deliberately not narrowed: `only` lists the keys the layer's
+// own group provides, and sanduk keeps it in step with that group, so
+// narrowing an include with it would drop every variable the include
+// contributes the moment the list was synced, silently. Narrowing the layers
+// below would be worse still — a repository's `only` would silently delete
+// what the directories above it share. --only on the command line is one
+// explicit request, so it still narrows the merged result, and it replaces
+// every layer's list while it is given.
+func (r *resolver) resolveProjects(layers []projectLayer, only, except []string) (selection, error) {
+	out := selection{env: map[string]string{}, files: map[string]vault.FilePayload{}}
+	for _, l := range layers {
+		// Which file asked for the entry, since with a chain it may be a
+		// directory the user is not standing in.
+		where := filepath.Join(l.Dir, vault.ProjectFileName)
+		base, err := r.resolveSelectors(parseSelectors(l.Include))
+		if err != nil {
+			return selection{}, fmt.Errorf("%s: %w", where, err)
+		}
+		own, err := r.resolveSelectors(parseSelectors([]string{l.Entry}))
+		if err != nil {
+			return selection{}, fmt.Errorf("%s: %w", where, err)
+		}
+		if len(only) == 0 && len(l.Only) > 0 {
+			if own, err = filterOnly(own, l.Only); err != nil {
+				return selection{}, fmt.Errorf("%s: %w", where, err)
+			}
+		}
+		out = merge(out, merge(base, own))
 	}
-	own, err := resolveSelectors(v, cfg, parseSelectors(entries[last:]))
-	if err != nil {
-		return selection{}, err
+	if len(only) > 0 {
+		var err error
+		if out, err = filterOnly(out, only); err != nil {
+			return selection{}, err
+		}
 	}
-	own, err = filterOnly(own, projOnly)
-	if err != nil {
-		return selection{}, err
-	}
-	return filterExcept(merge(base, own), except), nil
+	return filterExcept(out, except), nil
 }
 
 // merge layers one selection over another, last wins, across kinds: a plain
@@ -134,18 +150,42 @@ func merge(into, over selection) selection {
 	return into
 }
 
+// resolver expands selectors against one vault, remembering what each entry
+// produced.
+//
+// A chain of project files repeats itself: every layer may include the same
+// shared entry, and resolving it again would read it again — which on a
+// presence-gated backend is a second Touch ID prompt for a value sanduk
+// already holds. The cache is read-only to its callers: a cached selection is
+// only ever merged *over* another, and merge mutates the selection underneath,
+// never the one on top.
+type resolver struct {
+	v     *vault.Vault
+	cfg   *vault.Config
+	cache map[selector]selection
+}
+
+func newResolver(v *vault.Vault, cfg *vault.Config) *resolver {
+	return &resolver{v: v, cfg: cfg, cache: map[selector]selection{}}
+}
+
 // resolveSelectors expands selectors left to right and merges the results. A
 // later selector wins when two of them produce the same variable, so a base
 // entry can be overridden by a narrower one — including across kinds, so a
 // plain variable can override a file secret's path and the reverse.
-func resolveSelectors(v *vault.Vault, cfg *vault.Config, sels []selector) (selection, error) {
+func (r *resolver) resolveSelectors(sels []selector) (selection, error) {
 	out := selection{env: map[string]string{}, files: map[string]vault.FilePayload{}}
 	for _, s := range sels {
-		env, files, err := resolveOne(v, cfg, s)
-		if err != nil {
-			return selection{}, err
+		got, ok := r.cache[s]
+		if !ok {
+			env, files, err := resolveOne(r.v, r.cfg, s)
+			if err != nil {
+				return selection{}, err
+			}
+			got = selection{env: env, files: files}
+			r.cache[s] = got
 		}
-		out = merge(out, selection{env: env, files: files})
+		out = merge(out, got)
 	}
 	return out, nil
 }

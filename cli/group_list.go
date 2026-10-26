@@ -3,6 +3,8 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"sort"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -42,9 +44,18 @@ func newGroupListCmd(a *app) *cobra.Command {
 				return err
 			}
 
-			_, current, why := a.projectScope(cfg)
+			layers, why := a.projectChain(cfg)
 			if why != nil {
 				a.warnf("note: %v\n", why)
+			}
+			a.warnUntrusted(layers)
+			// Every layer of the chain applies here, so every one of them is
+			// a group this directory belongs to.
+			current := map[string]bool{}
+			for _, l := range layers {
+				if l.Trusted {
+					current[l.Entry] = true
+				}
 			}
 			// Only the locations that still exist; the rest are reported as
 			// missing rather than shown as if they meant something.
@@ -56,7 +67,7 @@ func newGroupListCmd(a *app) *cobra.Command {
 			var groups, untracked []string
 			for _, n := range names {
 				if _, ok := cfg.Groups[n]; ok {
-					if !here || n == current {
+					if !here || current[n] {
 						groups = append(groups, n)
 					}
 					continue
@@ -83,7 +94,7 @@ func newGroupListCmd(a *app) *cobra.Command {
 					Location:    g.Location,
 					Description: g.Description,
 					Expires:     g.Expires,
-					Current:     n == current,
+					Current:     current[n],
 					Present:     locations[n] != "",
 				}
 				if withKeys {
@@ -95,6 +106,8 @@ func newGroupListCmd(a *app) *cobra.Command {
 				}
 				rows = append(rows, r)
 			}
+
+			sortGroupRows(rows)
 
 			if asJSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())
@@ -109,8 +122,8 @@ func newGroupListCmd(a *app) *cobra.Command {
 			if len(rows) == 0 {
 				a.warnf("no groups yet — create one with \"sanduk add-group <name>\"\n")
 			}
-			if current != "" && !namesOnly && !asJSON {
-				a.warnf("* the group this directory belongs to\n")
+			if len(current) > 0 && !namesOnly && !asJSON {
+				a.warnf("* the group(s) this directory belongs to\n")
 			}
 			if len(untracked) > 0 {
 				a.warnf("%d entry/entries have no metadata and may be groups; "+
@@ -126,6 +139,43 @@ func newGroupListCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&here, "here", false, "list only the group this directory belongs to")
 	cmd.MarkFlagsMutuallyExclusive("json", "names")
 	return cmd
+}
+
+// sortGroupRows puts the rows the reader is standing in front of first: the
+// groups that apply here, then the ones above and below this directory, then
+// everything else alphabetically.
+//
+// A vault that is used holds a group per repository, and a flat alphabetical
+// list buries the two or three that matter where you are among a machine's
+// worth of others.
+func sortGroupRows(rows []groupRow) {
+	wd, err := os.Getwd()
+	if err != nil {
+		wd = ""
+	}
+	rank := func(r groupRow) int {
+		switch {
+		case r.Current:
+			return 0
+		case r.Present && withinDir(r.Location, wd):
+			return 1 // a directory this one is inside
+		case r.Present && wd != "" && withinDir(wd, r.Location):
+			return 2 // a repository underneath this one
+		default:
+			return 3
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		ri, rj := rank(rows[i]), rank(rows[j])
+		if ri != rj {
+			return ri < rj
+		}
+		// Within a rank, outer directories first: a chain reads top down.
+		if ri < 3 && rows[i].Location != rows[j].Location {
+			return len(rows[i].Location) < len(rows[j].Location)
+		}
+		return rows[i].Name < rows[j].Name
+	})
 }
 
 // groupRow is one row of "group list", and its JSON shape.
@@ -160,7 +210,7 @@ func printGroupTable(cmd *cobra.Command, rows []groupRow, withKeys bool) error {
 			info = "-"
 		}
 		info += expiryNote(r.Expires)
-		loc := r.Location
+		loc := shortPath(r.Location)
 		switch {
 		case loc == "":
 			loc = "-"
