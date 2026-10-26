@@ -21,13 +21,16 @@ cli/                    cobra commands, registered in cli/root.go; thin, no doma
   settings.go           flag > env > config > default resolution; default config and age paths (XDG)
   root.go               Execute and the root command (persistent flags bound to app fields)
   add.go, add_group.go  add a flat secret / create a group
+  init.go               init: write and approve a repository's .sanduk.toml
   add_file.go           store a credential file, injected as a path
   group.go              group set/unset/show/get, the field-level edit path
+  group_list.go         group list: every group and the directory it belongs to
   group_link.go         group link/unlink: a field that points at a flat secret instead of copying it
   get.go                get (redacted unless --reveal) and the field printer group get shares
   exec.go, export.go    run a command with secrets / print them for scripts
   selector.go           the selection pipeline exec and export share (selectors, --only, --except)
-  project.go            resolves the approved .sanduk.toml into a default entry
+  project.go            resolves the approved .sanduk.toml into a default entry; projectScope
+                        (the display-only variant) and adoptProject (add-group's project wiring)
   allow.go              approve a repository's .sanduk.toml
   doctor.go             group vs .env.example, --metadata drift, --links dangling links, --expiry deadlines
   import.go             bulk import from a .env file, a CSV export or a .1pux archive
@@ -48,6 +51,7 @@ vault/                  all domain logic; no cobra imports here
   project.go            .sanduk.toml discovery and parsing (keeps the parsed bytes' hash)
   project_unix.go       owner/mode checks for project files and private files (no-op on Windows)
   trust.go              the per-user project-approval store (trusted.toml)
+  scope.go              ScopeEntries: classifies entries project/member/global for listings
   keyring.go            backend selection (one native backend per OS), keychain/service names
   backend_age.go        age-encrypted file backend
   backend_biometric_*   macOS Touch ID backend (darwin+cgo) and its stub
@@ -164,7 +168,11 @@ Break these and you break the tool's security model:
    the list path is a regression. (The age backend's `Keys()` decrypts its single
    document to list names; that is the backend's business, and the values are
    never returned or printed. `doctor --metadata` reads values only under
-   `--fix`, to learn an untracked entry's type.)
+   `--fix`, to learn an untracked entry's type.) The one entry a listing opens
+   is the current project's, via `Vault.Variables`, and only for its variable
+   **names** — one read, so one prompt on a presence-gated backend, and
+   `--no-keys` skips even that. Classification itself (`vault.ScopeEntries`)
+   reads nothing: it works from `GroupLocations` and the `linked_by` hints.
 3. **Secret values are never accepted as command-line arguments** (argv is
    visible in process listings). Input comes from an echo-off prompt, `--from-env`,
    `--from-file`, or stdin. `group set` deliberately has no VALUE position for
@@ -195,13 +203,23 @@ Break these and you break the tool's security model:
    secret-service): `Open` silently tries the next allowed backend on failure,
    so offering several would split the vault across stores. Only when that one
    is not compiled in does sanduk fall back to its own age backend.
-9. **`.sanduk.toml` is non-secret, and only ever names an entry.** It is
+9. **`.sanduk.toml` is non-secret, and only ever names entries.** It is
    committed to repositories, so it must never grow a value field. It supplies
-   the default entry plus an optional key subset (`only`), nothing more.
+   the default entry, the entries merged underneath it (`include`, resolved
+   first so the project's own entry wins), and an optional key subset
+   (`only`) — names, nothing more. `include` takes entry names, not exec's
+   `ENVVAR=entry` bindings. There is deliberately no config.toml setting that
+   injects entries everywhere: a repository asks for what it needs, in a file
+   that is reviewed and approved as a whole.
 10. **Selectors resolve left to right and the last one wins**, in both `exec` and
     `export`; an entry name resolves through its own mapping, and `ENVVAR=entry`
     binds one flat secret. `--only` filters the merged result and errors on an
-    unknown key rather than silently injecting nothing.
+    unknown key rather than silently injecting nothing. A project file resolves
+    its `include` entries first and its own `entry` last, by the same rule.
+    Its `only` narrows that last entry alone (`resolveProject`): the list
+    tracks the project's group and sanduk keeps it in step, so filtering the
+    includes with it would silently drop every variable they contribute. The
+    `--only` flag is one explicit request and still narrows everything.
 11. **A dedicated keychain is opt-in.** `--keychain` / `SANDUK_KEYCHAIN` accepts a
     name, never a path (`keychainTarget()` rejects separators). The default stays
     `login`; see the README for why a second keychain is not automatically safer.
@@ -259,7 +277,12 @@ Break these and you break the tool's security model:
     (never a silently absent variable), and `doctor --links` reports it. Reads
     are deduplicated per target, which on `keychain-biometric` is one prompt per
     distinct secret; that backend also shares one `LAContext` so a single
-    command authenticates once.
+    command authenticates once. The `linked_by` list in config.toml mirrors
+    the same graph for display only — it is what keeps a group's building
+    blocks out of a listing — and is written by `group link`/`unlink` and
+    rebuilt by `doctor --links --fix`. Nothing resolves through it: a stale
+    hint may misplace a row in a listing and must never change what an entry
+    injects.
 18. **A file secret is bytes with a path, never a value.** `TypeFile` carries
     `Data` and a `Filename` hint and nothing else; `validate()` refuses a file
     entry with a value, fields or links, and refuses `Data` on any other type.
@@ -296,8 +319,33 @@ Break these and you break the tool's security model:
     an agent that can already run commands gains nothing from a second
     execution path, while a server that ran them would bypass the approval the
     user relies on. The agent is steered to write `sanduk exec` itself. Nothing
-    but protocol messages may go to stdout.
-22. **The vault package reads no environment and never prompts.** Paths,
+    but protocol messages may go to stdout. `list_entries` labels each entry
+    with its scope and marks the working directory's, but still returns every
+    entry: hiding one would only make the agent ask for it another way.
+22. **A scope is a view, never a resolution.** `project`/`member`/`global`
+    decide where an entry appears in `list` and `group list`, and nothing
+    else; `exec`, `export` and `get` resolve exactly what they resolved
+    before. Ownership of a directory is recorded in **your** config
+    (`GroupMeta.Location`, written by `add-group` at a repository root and by
+    `allow`), never taken from the repository, so no cloned repository can
+    claim a group by shipping a file — which is why a location needs no
+    approval and `.sanduk.toml` still does. When both claim the working
+    directory the approved project file wins, so what you see locally is what
+    a teammate and CI resolve from the same repository. `add-group` writing
+    and approving a project file is not a hole in invariant 14: those bytes
+    came from this command on this machine, and a later edit still revokes
+    the approval — and neither is the `only` list sanduk keeps in step with a
+    group (`syncProjectOnly`): it rewrites only that assignment, only in a
+    file that is already approved, only when the bytes still hash to what was
+    approved, and never starts a list that is not there. A listing never
+    fails over scope — an unusable project file
+    costs the narrower view and a note on stderr, and the hidden count is
+    always reported so a shorter list never reads as a missing entry. A
+    location that does not exist does not claim anything
+    (`GroupLocations` filters it, `StaleLocations` reports it): no working
+    directory can be inside it, so a group claimed by a deleted path would be
+    hidden everywhere.
+23. **The vault package reads no environment and never prompts.** Paths,
     backend settings and passphrase sources all arrive in `vault.Options`; the
     CLI owns `SANDUK_*`, XDG and terminal I/O. That keeps the security-relevant
     code deterministic and testable, and means a vault test cannot reach a real

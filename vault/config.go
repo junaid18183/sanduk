@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -39,13 +40,33 @@ type SecretMeta struct {
 	// inject an expired secret, because failing a deploy over a date in a
 	// metadata file would be worse than the stale key it is warning about.
 	Expires string `toml:"expires,omitempty"`
+	// LinkedBy names the groups that link to this secret. It exists so a
+	// listing can keep a group's building blocks out of the top level
+	// without reading every group entry, which would decrypt the whole
+	// vault on each list.
+	//
+	// It is a display hint and nothing resolves through it: the links
+	// themselves live in the backend entry (Entry.Links), so a stale or
+	// missing value here can only add or drop a row in a listing, never
+	// change which variables an entry injects. "sanduk doctor --links --fix"
+	// rebuilds it from the backend.
+	LinkedBy []string `toml:"linked_by,omitempty"`
 }
 
 // GroupMeta describes a grouped entry. Group field names are the environment
 // variable names, so no explicit mapping is required.
 type GroupMeta struct {
 	Description string `toml:"description,omitempty"`
-	Expires     string `toml:"expires,omitempty"`
+	// Location is the directory this group belongs to: the repository it was
+	// created in, or the one whose project file was approved. It is what
+	// lets a listing show the group you are standing in and leave every
+	// other repository's out.
+	//
+	// It is recorded here, in the user's own private config, rather than
+	// taken from a repository, so no cloned repository can claim a group by
+	// writing a file. A path that no longer exists simply stops matching.
+	Location string `toml:"location,omitempty"`
+	Expires  string `toml:"expires,omitempty"`
 }
 
 // LoadConfig reads the config file, returning an empty config if it does not
@@ -133,6 +154,165 @@ func (c *Config) RecordGroup(name, desc string) {
 	c.Groups[name] = g
 	delete(c.Secrets, name)
 	delete(c.Files, name)
+}
+
+// SetGroupLocation records the directory a group belongs to, or clears it when
+// dir is empty. It reports whether a group record existed to record it on: a
+// location describes a group sanduk already knows about.
+func (c *Config) SetGroupLocation(name, dir string) bool {
+	g, ok := c.Groups[name]
+	if !ok {
+		return false
+	}
+	if dir != "" {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return false
+		}
+		dir = filepath.Clean(abs)
+	}
+	g.Location = dir
+	c.Groups[name] = g
+	return true
+}
+
+// GroupLocations maps every group that belongs to an existing directory to
+// that directory. A group with no location belongs nowhere in particular and
+// is global.
+//
+// A location that is not there any more does not count. The directory may
+// have been moved, deleted, or never cloned on this machine — and a group
+// claimed by a directory that does not exist would otherwise be hidden from
+// every listing, since no working directory can ever be inside it. Falling
+// back to global means the worst case is a group you can still see.
+func (c *Config) GroupLocations() map[string]string {
+	if c == nil {
+		return nil
+	}
+	out := make(map[string]string, len(c.Groups))
+	for name, g := range c.Groups {
+		if g.Location != "" && isDir(g.Location) {
+			out[name] = g.Location
+		}
+	}
+	return out
+}
+
+// isDir reports whether path is an existing directory.
+func isDir(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
+}
+
+// StaleLocations lists the groups whose recorded directory is gone, sorted.
+// They still work — they are simply global again — so this is something
+// doctor reports, never something a command fails on.
+func (c *Config) StaleLocations() []string {
+	var out []string
+	for name, g := range c.Groups {
+		if g.Location != "" && !isDir(g.Location) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// GroupAt returns the group whose location contains dir.
+//
+// A group matches dir and everything below it, so any subdirectory of a
+// repository resolves to the same group — the same reach a project file has,
+// which LoadProject finds by walking up. The deepest location wins, so a
+// repository checked out inside another one keeps its own group.
+func (c *Config) GroupAt(dir string) (string, bool) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", false
+	}
+	abs = filepath.Clean(abs)
+
+	best, bestLen := "", -1
+	for name, loc := range c.GroupLocations() {
+		if !withinDir(loc, abs) || len(loc) < bestLen {
+			continue
+		}
+		// Two groups on the same directory would otherwise depend on map
+		// order; the names are sorted so the answer is at least stable.
+		if len(loc) == bestLen && name > best {
+			continue
+		}
+		best, bestLen = name, len(loc)
+	}
+	return best, best != ""
+}
+
+// withinDir reports whether path is root or lies under it. The separator check
+// keeps /srv/app-old from matching a group located at /srv/app.
+func withinDir(root, path string) bool {
+	if path == root {
+		return true
+	}
+	return strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
+// RecordLink notes that group links to the flat secret target, so a listing
+// can show target as part of that group rather than as a standalone entry. A
+// target with no metadata record gets one: only a flat secret can be a link
+// target, so its type is already known.
+func (c *Config) RecordLink(target, group string) {
+	if c.Secrets == nil {
+		c.Secrets = map[string]SecretMeta{}
+	}
+	m := c.Secrets[target]
+	for _, g := range m.LinkedBy {
+		if g == group {
+			return
+		}
+	}
+	m.LinkedBy = append(m.LinkedBy, group)
+	sort.Strings(m.LinkedBy)
+	c.Secrets[target] = m
+}
+
+// RemoveLink forgets that group linked to target.
+func (c *Config) RemoveLink(target, group string) {
+	m, ok := c.Secrets[target]
+	if !ok {
+		return
+	}
+	m.LinkedBy = withoutString(m.LinkedBy, group)
+	c.Secrets[target] = m
+}
+
+// SetLinkedBy replaces every linked_by hint with byTarget, which is the link
+// graph as the backend actually holds it. It is how doctor repairs a mirror
+// that drifted — a group edited on another machine, or a config restored from
+// a backup.
+func (c *Config) SetLinkedBy(byTarget map[string][]string) {
+	for name, m := range c.Secrets {
+		if len(m.LinkedBy) > 0 {
+			m.LinkedBy = nil
+			c.Secrets[name] = m
+		}
+	}
+	for target, groups := range byTarget {
+		for _, g := range groups {
+			c.RecordLink(target, g)
+		}
+	}
+}
+
+// withoutString returns list without every occurrence of s, or nil when that
+// empties it, so an empty list is omitted from the file rather than written
+// as [].
+func withoutString(list []string, s string) []string {
+	var out []string
+	for _, v := range list {
+		if v != s {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // ExpiryLayout is the date format used by the expires field. A plain date,
@@ -248,11 +428,19 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-// Forget removes every metadata record for name.
+// Forget removes every metadata record for name, including any linked_by hint
+// naming it: a removed group no longer owns the secrets it used to link.
 func (c *Config) Forget(name string) {
 	delete(c.Secrets, name)
 	delete(c.Groups, name)
 	delete(c.Files, name)
+	for target, m := range c.Secrets {
+		if len(m.LinkedBy) == 0 {
+			continue
+		}
+		m.LinkedBy = withoutString(m.LinkedBy, name)
+		c.Secrets[target] = m
+	}
 }
 
 // SaveConfig writes the config file with restrictive permissions. The write is

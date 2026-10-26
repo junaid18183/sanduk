@@ -66,6 +66,11 @@ func saveTrust(path string, t *TrustStore) error {
 	return WriteFileAtomic(path, buf.Bytes(), 0o600)
 }
 
+// HashBytes is the content hash a project file's approval is recorded
+// against, exported so a caller that rewrites such a file can check it has
+// not changed since it was read.
+func HashBytes(b []byte) string { return hashBytes(b) }
+
 func hashBytes(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])

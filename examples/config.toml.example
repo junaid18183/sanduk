@@ -67,7 +67,19 @@
   [secrets.openai]
     env = "OPENAI_API_KEY"
     description = "OpenAI API key"
+    # Groups that link to this secret. Written by `sanduk group link`, and
+    # rebuilt from the vault by `sanduk doctor --links --fix`. It only keeps a
+    # group's building blocks out of the top of `sanduk list`; the links
+    # themselves live in the group entry, so changing this cannot change what
+    # any command injects.
+    linked_by = ["warden"]
 
 [groups]
   [groups.warden]
     description = "warden API + DB stack"
+    # The directory this group belongs to. Recorded by `sanduk add-group` at a
+    # repository root and by `sanduk allow`. `sanduk list` shows the group when
+    # you are in that directory and leaves it out everywhere else. It is a
+    # path, never a value, and it is deliberately here rather than in the
+    # repository: a cloned repository must not be able to claim a group.
+    location = "/Users/you/work/warden"

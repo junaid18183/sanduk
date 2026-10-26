@@ -93,13 +93,23 @@ func openKeyring(o Options) (keyring.Keyring, error) {
 	}
 
 	cfg := keyring.Config{
-		ServiceName:             service,
-		KeychainName:            keychain,
-		LibSecretCollectionName: "login",
-		KWalletAppID:            service,
-		KWalletFolder:           service,
-		WinCredPrefix:           service,
-		PassPrefix:              service,
+		ServiceName:  service,
+		KeychainName: keychain,
+		// Put sanduk in the ACL of every item it writes, so reading one back
+		// does not ask the user to approve sanduk again. Without this, a
+		// command that resolves a group with three links asks four times —
+		// once per item — which trains people to click through prompts.
+		//
+		// It trusts this binary, not every application: another program
+		// reading the item is still challenged. The trust is tied to the
+		// binary's code signature, so a new build is a new application and
+		// is asked once per item again.
+		KeychainTrustApplication: true,
+		LibSecretCollectionName:  "login",
+		KWalletAppID:             service,
+		KWalletFolder:            service,
+		WinCredPrefix:            service,
+		PassPrefix:               service,
 	}
 
 	// Only consulted when keyring has to create a dedicated keychain; when it

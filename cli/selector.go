@@ -71,14 +71,14 @@ func (a *app) resolveSelection(sels, only, except []string) (selection, error) {
 	}
 
 	if len(sels) == 0 {
-		entry, projOnly, err := a.defaultEntry()
+		entries, projOnly, err := a.defaultEntry()
 		if err != nil {
 			return selection{}, err
 		}
-		sels = []string{entry}
-		if len(only) == 0 {
-			only = projOnly
+		if len(only) == 0 && len(projOnly) > 0 {
+			return resolveProject(v, cfg, entries, projOnly, except)
 		}
+		sels = entries
 	}
 
 	sel, err := resolveSelectors(v, cfg, parseSelectors(sels))
@@ -92,6 +92,48 @@ func (a *app) resolveSelection(sels, only, except []string) (selection, error) {
 	return filterExcept(sel, except), nil
 }
 
+// resolveProject resolves what a project file asks for: the entries it
+// includes, merged underneath its own entry, with `only` applied to that
+// entry alone.
+//
+// The includes are deliberately not narrowed. `only` lists the keys the
+// project's own group provides, and sanduk keeps it in step with that group
+// — narrowing the includes with it would drop every variable they contribute
+// the moment the list was synced, silently. A file that names a global entry
+// has already said it wants what that entry provides; --only on the command
+// line still narrows everything, because that is one explicit request rather
+// than a list maintained over time.
+func resolveProject(v *vault.Vault, cfg *vault.Config, entries, projOnly, except []string) (selection, error) {
+	last := len(entries) - 1
+	base, err := resolveSelectors(v, cfg, parseSelectors(entries[:last]))
+	if err != nil {
+		return selection{}, err
+	}
+	own, err := resolveSelectors(v, cfg, parseSelectors(entries[last:]))
+	if err != nil {
+		return selection{}, err
+	}
+	own, err = filterOnly(own, projOnly)
+	if err != nil {
+		return selection{}, err
+	}
+	return filterExcept(merge(base, own), except), nil
+}
+
+// merge layers one selection over another, last wins, across kinds: a plain
+// variable replaces a file secret's path and the reverse.
+func merge(into, over selection) selection {
+	for k, val := range over.env {
+		into.env[k] = val
+		delete(into.files, k)
+	}
+	for k, p := range over.files {
+		into.files[k] = p
+		delete(into.env, k)
+	}
+	return into
+}
+
 // resolveSelectors expands selectors left to right and merges the results. A
 // later selector wins when two of them produce the same variable, so a base
 // entry can be overridden by a narrower one — including across kinds, so a
@@ -103,14 +145,7 @@ func resolveSelectors(v *vault.Vault, cfg *vault.Config, sels []selector) (selec
 		if err != nil {
 			return selection{}, err
 		}
-		for k, val := range env {
-			out.env[k] = val
-			delete(out.files, k)
-		}
-		for k, p := range files {
-			out.files[k] = p
-			delete(out.env, k)
-		}
+		out = merge(out, selection{env: env, files: files})
 	}
 	return out, nil
 }

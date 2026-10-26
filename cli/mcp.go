@@ -168,7 +168,11 @@ func mcpTools() []map[string]any {
 			"name": "list_entries",
 			"description": "List every entry in the vault with its kind, the environment " +
 				"variable it is exposed as (for a secret or file), its description and any " +
-				"rotation deadline. Reads metadata only and never returns a secret value.",
+				"rotation deadline. Each entry also carries a scope: \"project\" for one " +
+				"belonging to a repository (with \"current\": true for this working " +
+				"directory's, the entry `sanduk exec` resolves to here with no arguments), " +
+				"\"member\" for a secret a group links to, and \"global\" for one that " +
+				"stands on its own. Reads metadata only and never returns a secret value.",
 			"inputSchema": noArgs,
 		},
 		{
@@ -245,6 +249,14 @@ type mcpEntry struct {
 	Variables   []string `json:"variables,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Expires     string   `json:"expires,omitempty"`
+	// Scope tells an agent which entries are worth its attention: the one
+	// belonging to the directory it is working in, rather than one of the
+	// many that belong somewhere else. Every entry is still returned —
+	// hiding one would just make the agent ask for it another way.
+	Scope string `json:"scope,omitempty"`
+	// Current marks the entry of the working directory, the one "sanduk
+	// exec" resolves to here with no arguments.
+	Current bool `json:"current,omitempty"`
 }
 
 func (a *app) mcpListEntries() (map[string]any, error) {
@@ -261,9 +273,23 @@ func (a *app) mcpListEntries() (map[string]any, error) {
 		return nil, err
 	}
 
+	// The scope each entry is in, so the agent can tell this repository's
+	// secrets from every other repository's. A project file that is not
+	// approved narrows nothing, exactly as for the CLI.
+	_, current, _ := a.projectScope(cfg)
+	scopes := make(map[string]vault.Scoped, len(names))
+	for _, s := range vault.ScopeEntries(names, cfg, cfg.GroupLocations(), current) {
+		scopes[s.Name] = s
+	}
+
 	entries := make([]mcpEntry, 0, len(names))
 	for _, name := range names {
-		e := mcpEntry{Name: name, Expires: cfg.ExpiryOf(name)}
+		e := mcpEntry{
+			Name:    name,
+			Expires: cfg.ExpiryOf(name),
+			Scope:   scopes[name].Scope,
+			Current: scopes[name].Current,
+		}
 		switch g, isGroup := cfg.Groups[name]; {
 		case isGroup:
 			e.Kind = "group"

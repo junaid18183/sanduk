@@ -173,15 +173,60 @@ func TestDefaultEntryFromProjectFile(t *testing.T) {
 		t.Fatalf("approve: %v", err)
 	}
 
-	entry, only, err := newApp().defaultEntry()
+	entries, only, err := newApp().defaultEntry()
 	if err != nil {
 		t.Fatalf("defaultEntry: %v", err)
 	}
-	if entry != "warden" {
-		t.Fatalf("entry = %q, want warden", entry)
+	if len(entries) != 1 || entries[0] != "warden" {
+		t.Fatalf("entries = %v, want [warden]", entries)
 	}
 	if len(only) != 1 || only[0] != "DB_URL" {
 		t.Fatalf("only = %v, want [DB_URL]", only)
+	}
+}
+
+// include names the global entries a repository also needs. They resolve
+// before the project's own entry, so the project wins on a shared variable.
+func TestDefaultEntryIncludesResolveFirst(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, vault.ProjectFileName)
+	if err := writeFileString(path, "include = [\"openai\", \"agents\"]\nentry = \"warden\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	t.Setenv("SANDUK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	_, proj, err := vault.LoadProject(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, err := vault.ApproveProject(newApp().trustPath(), proj); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	entries, _, err := newApp().defaultEntry()
+	if err != nil {
+		t.Fatalf("defaultEntry: %v", err)
+	}
+	want := []string{"openai", "agents", "warden"}
+	if len(entries) != 3 {
+		t.Fatalf("entries = %v, want %v", entries, want)
+	}
+	for i, n := range want {
+		if entries[i] != n {
+			t.Fatalf("entries = %v, want %v (the project's own entry last)", entries, want)
+		}
+	}
+}
+
+// A binding belongs on the command line, not in a committed file.
+func TestProjectIncludeRefusesABinding(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeFileString(filepath.Join(dir, vault.ProjectFileName),
+		"entry = \"warden\"\ninclude = [\"VAR=openai\"]\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := vault.LoadProject(dir); err == nil {
+		t.Fatal("include should refuse a VAR=entry binding")
 	}
 }
 

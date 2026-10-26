@@ -357,6 +357,36 @@ func groupFieldNames(e *Entry) []string {
 	return names
 }
 
+// Variables describes what one entry contributes to a child's environment: the
+// variable names, and for a linked field the flat secret its value is read
+// from. It never carries a value, so it is safe to print.
+type Variables struct {
+	Type  string
+	Names []string
+	// Links maps a variable name to the flat secret it resolves through.
+	// Absent for a variable the entry stores itself.
+	Links map[string]string
+}
+
+// Variables reads one entry and reports the variables it provides. It is the
+// single read behind a project-scoped listing: one entry, names only, so the
+// cost is one decrypt (and on a presence-gated backend one prompt), not a walk
+// of the whole vault.
+func (v *Vault) Variables(name string, c *Config) (*Variables, error) {
+	e, err := v.Get(name)
+	if err != nil {
+		return nil, err
+	}
+	out := &Variables{Type: e.Type}
+	if e.Type == TypeGroup {
+		out.Names, out.Links = groupFieldNames(e), e.Links
+		return out, nil
+	}
+	// A flat or file secret contributes the one variable it is mapped to.
+	out.Names = []string{c.EnvNameForSecret(name)}
+	return out, nil
+}
+
 // Remove deletes an entry.
 func (v *Vault) Remove(name string) error {
 	if err := ValidateEntryName(name); err != nil {

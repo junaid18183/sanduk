@@ -3,6 +3,7 @@ package vault
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -75,5 +76,67 @@ func TestLoadProjectRequiresEntry(t *testing.T) {
 
 	if _, _, err := LoadProject(dir); err == nil {
 		t.Fatal("expected an error for a project file without an entry")
+	}
+}
+
+func TestReplaceOnlyPreservesTheRestOfTheFile(t *testing.T) {
+	src := []byte("# why this file exists\n" +
+		"include = [\"openai\"]\n" +
+		"entry = \"warden\"\n" +
+		"only = [\"DB_URL\"]\n" +
+		"# trailing note\n")
+
+	out, ok := ReplaceOnly(src, []string{"DB_URL", "API_KEY"})
+	if !ok {
+		t.Fatal("ReplaceOnly did not find the assignment")
+	}
+	got := string(out)
+	if !strings.Contains(got, `only = ["DB_URL", "API_KEY"]`) {
+		t.Fatalf("list not rewritten:\n%s", got)
+	}
+	// Everything the user wrote around it survives: this is a committed file,
+	// and re-encoding it would drop the comments that explain it.
+	for _, want := range []string{"# why this file exists", `include = ["openai"]`,
+		`entry = "warden"`, "# trailing note"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rewrite lost %q:\n%s", want, got)
+		}
+	}
+	// And it still parses to the new list.
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, ProjectFileName), got)
+	_, p, err := LoadProject(dir)
+	if err != nil || p == nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if len(p.Only) != 2 || p.Only[0] != "DB_URL" || p.Only[1] != "API_KEY" {
+		t.Fatalf("only = %v", p.Only)
+	}
+}
+
+func TestReplaceOnlyHandlesMultilineAndAbsentLists(t *testing.T) {
+	multi := []byte("entry = \"warden\"\nonly = [\n  \"DB_URL\",\n  \"API_KEY\",\n]\nkeep = 1\n")
+	out, ok := ReplaceOnly(multi, []string{"DB_URL"})
+	if !ok {
+		t.Fatal("a multi-line list should be found")
+	}
+	if got := string(out); !strings.Contains(got, `only = ["DB_URL"]`) || !strings.Contains(got, "keep = 1") {
+		t.Fatalf("multi-line rewrite = %q", got)
+	}
+
+	// No list: sanduk keeps one current, it does not start one.
+	none := []byte("entry = \"warden\"\n")
+	if out, ok := ReplaceOnly(none, []string{"DB_URL"}); ok || string(out) != string(none) {
+		t.Fatalf("ReplaceOnly invented a list: %q (ok=%v)", out, ok)
+	}
+	// A commented-out list is not an assignment either.
+	commented := []byte("entry = \"warden\"\n# only = [\"DB_URL\"]\n")
+	if _, ok := ReplaceOnly(commented, []string{"X"}); ok {
+		t.Fatal("a commented line must not be treated as the assignment")
+	}
+	// Neither is a key that merely ends in "only".
+	other := []byte("entry = \"warden\"\nreadonly = true\n")
+	if _, ok := ReplaceOnly(other, []string{"X"}); ok {
+		t.Fatal("readonly is not only")
 	}
 }

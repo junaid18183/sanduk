@@ -219,3 +219,40 @@ func TestMCPMalformedLineIsAParseError(t *testing.T) {
 		t.Fatalf("code = %v", errObj["code"])
 	}
 }
+
+// An agent needs to tell this repository's entry from the many that belong to
+// other repositories, so every entry carries its scope.
+func TestMCPListEntriesCarriesScope(t *testing.T) {
+	testEnv(t)
+	addProjectGroup(t, "warden")
+	if _, err := runCmd(t, "sk-test-value", "add", "standalone"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	got := mcpSession(t, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_entries"}}`)
+	var doc struct {
+		Entries []struct {
+			Name    string `json:"name"`
+			Scope   string `json:"scope"`
+			Current bool   `json:"current"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(toolText(t, got[0])), &doc); err != nil {
+		t.Fatalf("list_entries: %v", err)
+	}
+	if len(doc.Entries) != 2 {
+		t.Fatalf("every entry must still be returned, got %+v", doc.Entries)
+	}
+	for _, e := range doc.Entries {
+		switch e.Name {
+		case "warden":
+			if e.Scope != "project" || !e.Current {
+				t.Fatalf("warden = %+v, want the current project entry", e)
+			}
+		case "standalone":
+			if e.Scope != "global" || e.Current {
+				t.Fatalf("standalone = %+v, want global", e)
+			}
+		}
+	}
+}

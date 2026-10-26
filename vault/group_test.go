@@ -3,6 +3,8 @@ package vault
 import (
 	"errors"
 	"testing"
+
+	"github.com/99designs/keyring"
 )
 
 func TestMergeGroupCreatesWhenAbsent(t *testing.T) {
@@ -147,5 +149,52 @@ func TestGroupFieldNamesMissing(t *testing.T) {
 	v := newFileVault(t)
 	if _, err := v.GroupFieldNames("nope"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// countingKeyring wraps a keyring and counts reads, so a command's prompt
+// count on a backend that asks per read can be asserted.
+type countingKeyring struct {
+	keyring.Keyring
+	gets map[string]int
+}
+
+func (c *countingKeyring) Get(key string) (keyring.Item, error) {
+	c.gets[key]++
+	return c.Keyring.Get(key)
+}
+
+// A dedicated keychain and keychain-biometric both prompt per read, so
+// reading one entry twice to learn two things about it costs the user two
+// prompts. Variables answers both from a single read.
+func TestVariablesReadsTheEntryOnce(t *testing.T) {
+	v := newFileVault(t)
+	if err := v.AddSecret("openai", "sk-test-value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.AddGroup("warden", map[string]string{"DB_URL": "postgres://test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.LinkGroupField("warden", "OPENAI_API_KEY", "openai"); err != nil {
+		t.Fatal(err)
+	}
+
+	counter := &countingKeyring{Keyring: v.kr, gets: map[string]int{}}
+	v.kr = counter
+
+	vars, err := v.Variables("warden", &Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := counter.gets["warden"]; n != 1 {
+		t.Fatalf("Variables read the entry %d times, want 1", n)
+	}
+	if len(vars.Names) != 2 || vars.Links["OPENAI_API_KEY"] != "openai" {
+		t.Fatalf("Variables = %+v, want both names and the link from one read", vars)
+	}
+	// A link target is not read: only names are wanted, and reading it would
+	// be another prompt for a value nobody asked for.
+	if n := counter.gets["openai"]; n != 0 {
+		t.Fatalf("Variables read the link target %d times, want 0", n)
 	}
 }

@@ -58,6 +58,7 @@ func newAddGroupCmd(a *app) *cobra.Command {
 		replace    bool
 		descFlag   string
 		expires    string
+		noProject  bool
 	)
 
 	cmd := &cobra.Command{
@@ -70,7 +71,12 @@ func newAddGroupCmd(a *app) *cobra.Command {
 			"Values are never taken from argv. When more than one source is given,\n" +
 			"--field overrides --from-dotenv, which overrides --from-json.\n\n" +
 			"An existing entry is never replaced silently: use \"sanduk group set\" to merge\n" +
-			"fields, or pass --replace to overwrite the whole entry.",
+			"fields, or pass --replace to overwrite the whole entry.\n\n" +
+			"Run inside a repository root, this also makes the group that repository's:\n" +
+			"the directory is recorded in your config, so the group is listed there and\n" +
+			"left out of listings elsewhere, and a " + vault.ProjectFileName + " naming it is written\n" +
+			"and approved unless one already exists. That file is non-secret and meant to\n" +
+			"be committed. --no-project creates a plain global group instead.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -147,6 +153,22 @@ func newAddGroupCmd(a *app) *cobra.Command {
 			}
 
 			a.warnf("Added group %q with %d field(s)\n", name, len(m))
+
+			// A group created inside a repository belongs to it: record that,
+			// and give the repository the project file that lets exec and
+			// export find the group without being told.
+			if !noProject {
+				root, here := repoRoot(".")
+				switch {
+				case here:
+					if err := a.adoptProject(name, root); err != nil {
+						return err
+					}
+				case root != "":
+					a.warnf("note: %q is a global group; run this from %s, or "+
+						"\"sanduk allow\" there, to tie it to that repository\n", name, root)
+				}
+			}
 			return nil
 		},
 	}
@@ -157,6 +179,8 @@ func newAddGroupCmd(a *app) *cobra.Command {
 	cmd.Flags().StringVar(&descFlag, "description", "", "human-readable description")
 	cmd.Flags().StringVar(&expires, "expires", "", "rotation deadline as YYYY-MM-DD, or \"none\" to clear it")
 	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite an existing entry of any type")
+	cmd.Flags().BoolVar(&noProject, "no-project", false,
+		"create a global group: do not tie it to this directory or write "+vault.ProjectFileName)
 	cmd.MarkFlagsMutuallyExclusive("from-json", "from-dotenv")
 	return cmd
 }
