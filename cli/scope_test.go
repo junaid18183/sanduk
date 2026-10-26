@@ -316,9 +316,21 @@ func TestGroupList(t *testing.T) {
 // global, not vanish from every listing.
 func TestListShowsAGroupWhoseDirectoryIsGone(t *testing.T) {
 	cfgPath := testEnv(t)
-	gone := addProjectGroup(t, "warden")
+	addProjectGroup(t, "warden")
 	t.Chdir(t.TempDir())
-	if err := os.RemoveAll(gone); err != nil {
+
+	// Point the group at a directory that is not there, which is what a
+	// deleted, moved or never-cloned repository looks like. The location is
+	// repointed rather than the directory deleted: Windows refuses to remove
+	// a directory any process has had as its working directory, and this
+	// test has.
+	missing := filepath.Join(t.TempDir(), "not-cloned")
+	if err := vault.UpdateConfig(cfgPath, func(c *vault.Config) error {
+		if !c.SetGroupLocation("warden", missing) {
+			t.Fatal("SetGroupLocation")
+		}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 
