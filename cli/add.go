@@ -10,7 +10,6 @@ import (
 func newAddCmd(a *app) *cobra.Command {
 	var (
 		fromEnv     string
-		fromFile    string
 		envName     string
 		description string
 		expires     string
@@ -19,11 +18,14 @@ func newAddCmd(a *app) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "add <name>",
-		Short: "Add or update a flat secret",
-		Long: "Add or update a flat secret. The value is read from an echo-disabled\n" +
-			"prompt, an environment variable, a file, or stdin — never from argv.\n\n" +
-			"An existing flat secret is replaced in place. Replacing a group with a flat\n" +
-			"secret discards every field, so it requires --replace.",
+		Short: "Add a new flat secret",
+		Long: "Add a flat secret. The value is read from an echo-disabled prompt, an\n" +
+			"environment variable, or stdin, never from argv. To store a file's contents\n" +
+			"as a value, pipe it in: sanduk add NAME < key.txt. Credential files are\n" +
+			"stored with add-file instead.\n\n" +
+			"An existing entry is never overwritten silently. To change a flat secret's\n" +
+			"value use rotate; --replace overwrites any entry, including a group, and\n" +
+			"discards what it held.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -53,14 +55,12 @@ func newAddCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Updating a flat secret in place is what add is for; anything else
-			// stored under the name would be destroyed, so that needs
-			// --replace. The type is read from the backend, not the metadata,
-			// which can drift: this costs one read of an existing entry (a
-			// Touch ID prompt on keychain-biometric), but the check fails
-			// closed.
+			// Overwriting an entry destroys it, so that needs --replace. The
+			// type is read from the backend, not the metadata, which can
+			// drift: this costs one read of an existing entry (a Touch ID
+			// prompt on keychain-biometric), but the check fails closed.
 			if !replace {
-				if err := refuseNonSecret(v, name); err != nil {
+				if err := refuseExisting(v, name); err != nil {
 					return err
 				}
 			}
@@ -73,7 +73,7 @@ func newAddCmd(a *app) *cobra.Command {
 				}
 			}
 
-			value, err := readSecret(fromEnv, fromFile, true)
+			value, err := readSecret(fromEnv, "", true)
 			if err != nil {
 				return err
 			}
@@ -96,18 +96,16 @@ func newAddCmd(a *app) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&fromEnv, "from-env", "", "read the value from this environment variable")
-	cmd.Flags().StringVar(&fromFile, "from-file", "", "read the value from this file")
 	cmd.Flags().StringVar(&envName, "as", "", "environment variable to expose the secret as")
 	cmd.Flags().StringVar(&description, "description", "", "human-readable description")
 	cmd.Flags().StringVar(&expires, "expires", "", "rotation deadline as YYYY-MM-DD, or \"none\" to clear it")
-	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite an existing entry that is not a flat secret (e.g. a group)")
-	cmd.MarkFlagsMutuallyExclusive("from-env", "from-file")
+	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite an existing entry of any type")
 	return cmd
 }
 
-// refuseNonSecret fails when name exists in the vault as anything other than a
-// flat secret. A missing entry is fine: add creates it.
-func refuseNonSecret(v *vault.Vault, name string) error {
+// refuseExisting fails when name already exists in the vault, whatever its
+// type. A missing entry is fine: add creates it.
+func refuseExisting(v *vault.Vault, name string) error {
 	exists, err := v.Exists(name)
 	if err != nil || !exists {
 		return err
@@ -116,8 +114,8 @@ func refuseNonSecret(v *vault.Vault, name string) error {
 	if err != nil {
 		return err
 	}
-	if e.Type != vault.TypeSecret {
-		return fmt.Errorf("%q is a %s; pass --replace to overwrite it with a flat secret", name, e.Type)
+	if e.Type == vault.TypeSecret {
+		return fmt.Errorf("%q already exists; use \"sanduk rotate %s\" to change its value, or --replace to overwrite it", name, name)
 	}
-	return nil
+	return fmt.Errorf("%q already exists as a %s; pass --replace to overwrite it", name, e.Type)
 }

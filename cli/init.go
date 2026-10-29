@@ -28,8 +28,8 @@ func newInitCmd(a *app) *cobra.Command {
 			"It writes " + vault.ProjectFileName + " naming the entry (the directory's name by\n" +
 			"default), approves it, and records the directory against the group so\n" +
 			"\"sanduk list\" shows it here and leaves it out elsewhere. The entry does not\n" +
-			"have to exist yet — create it afterwards with \"sanduk group set\", or pass\n" +
-			"--from-dotenv to seed it now.\n\n" +
+			"have to exist yet: create it afterwards with \"sanduk add-group --field KEY\", or\n" +
+			"pass --from-dotenv to seed it now.\n\n" +
 			"  sanduk init                             # entry named after the directory\n" +
 			"  sanduk init --from-template             # fill in this repo's .env.example\n" +
 			"  sanduk init contexthub --from-dotenv .env\n" +
@@ -196,7 +196,7 @@ func newInitCmd(a *app) *cobra.Command {
 			if recorded {
 				a.warnf("Recorded %q as the group for %s\n", name, dir)
 			} else {
-				a.warnf("Next: sanduk group set %s KEY   (the entry does not exist yet)\n", name)
+				a.warnf("Next: sanduk add-group %s --field KEY   (the group does not exist yet)\n", name)
 			}
 			return nil
 		},

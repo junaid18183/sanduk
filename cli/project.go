@@ -86,7 +86,7 @@ func (a *app) defaultProjects() ([]projectLayer, error) {
 // The approved project files come first, outermost to nearest, because that
 // is the order they inject in. A recorded location is added underneath them
 // only when it is deeper than every one of them, which keeps a group visible
-// in its own directory after add-group --no-project, or when the project
+// in its own directory after add-group --global, or when the project
 // file was never committed.
 //
 // This decides a view and nothing else. exec, export and doctor still resolve

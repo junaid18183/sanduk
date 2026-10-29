@@ -172,12 +172,15 @@ func newDoctorCmd(a *app) *cobra.Command {
 
 			// A linked field is as present as a stored one; comparing only
 			// e.Fields would report every link as missing.
-			present := make(map[string]string, len(e.Fields)+len(e.Links))
+			present := make(map[string]string, e.FieldCount())
 			for k, val := range e.Fields {
 				present[k] = val
 			}
 			for k, target := range e.Links {
 				present[k] = target
+			}
+			for k, ref := range e.FieldLinks {
+				present[k] = ref
 			}
 			missing, extra := diffKeys(present, tmpl)
 			isMissing := make(map[string]bool, len(missing))
@@ -227,10 +230,10 @@ func newDoctorCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&metadata, "metadata", false, "check the metadata config against the vault instead")
 	cmd.Flags().BoolVar(&showChain, "chain", false,
 		"report the "+vault.ProjectFileName+" files that apply here and what each contributes")
-	cmd.Flags().BoolVar(&links, "links", false, "check every group link resolves to a flat secret")
+	cmd.Flags().BoolVar(&links, "links", false, "check every group link resolves to a flat secret or group field")
 	cmd.Flags().BoolVar(&expiry, "expiry", false, "report entries whose rotation deadline has passed or is near")
 	cmd.Flags().IntVar(&within, "within", 14, "with --expiry, how many days ahead counts as due")
-	cmd.Flags().BoolVar(&fix, "fix", false, "with --metadata, repair the drift it finds")
+	cmd.Flags().BoolVar(&fix, "fix", false, "with --metadata or --links, repair the drift or the hints it finds")
 	cmd.Flags().StringVar(&template, "template", "",
 		"template file to compare against (default "+defaultTemplateName+")")
 	cmd.ValidArgsFunction = a.completeEntryNames
@@ -353,7 +356,11 @@ func (a *app) doctorLinks(cmd *cobra.Command, fix bool) error {
 	// prompt on a dedicated keychain or keychain-biometric — and the values
 	// are not, so nothing secret is held while the report is built.
 	types := make(map[string]string, len(names))
-	links := make(map[string]map[string]string, len(names))
+	flatLinks := make(map[string]map[string]string, len(names))
+	fieldLinks := make(map[string]map[string]string, len(names))
+	// Stored field names only, never their values: a field link's target is
+	// checked for existence, which needs the names and nothing more.
+	storedFields := make(map[string]map[string]bool, len(names))
 	for _, n := range names {
 		e, err := v.Get(n)
 		if err != nil {
@@ -361,7 +368,12 @@ func (a *app) doctorLinks(cmd *cobra.Command, fix bool) error {
 		}
 		types[n] = e.Type
 		if e.Type == vault.TypeGroup {
-			links[n] = e.Links
+			flatLinks[n] = e.Links
+			fieldLinks[n] = e.FieldLinks
+			storedFields[n] = make(map[string]bool, len(e.Fields))
+			for k := range e.Fields {
+				storedFields[n][k] = true
+			}
 		}
 	}
 
@@ -369,14 +381,15 @@ func (a *app) doctorLinks(cmd *cobra.Command, fix bool) error {
 	var rows []linkRef
 	dangling := 0
 	// The link graph as the backend actually holds it, which is what the
-	// config's display hints are supposed to mirror.
+	// config's display hints are supposed to mirror. A field link gets no
+	// hint: its target is a group, which has no metadata record to hint at.
 	byTarget := map[string][]string{}
 	for _, n := range names {
 		if types[n] != vault.TypeGroup {
 			continue
 		}
-		for _, k := range sortedMapKeys(links[n]) {
-			target := links[n][k]
+		for _, k := range sortedMapKeys(flatLinks[n]) {
+			target := flatLinks[n][k]
 			status := "ok"
 			switch typ, ok := types[target]; {
 			case !ok:
@@ -390,6 +403,26 @@ func (a *app) doctorLinks(cmd *cobra.Command, fix bool) error {
 				byTarget[target] = append(byTarget[target], n)
 			}
 			rows = append(rows, linkRef{group: n, key: k, target: target, status: status})
+		}
+		for _, k := range sortedMapKeys(fieldLinks[n]) {
+			ref := fieldLinks[n][k]
+			status := "ok"
+			if src, field, ok := vault.SplitFieldRef(ref); !ok {
+				status = "malformed"
+			} else {
+				switch typ, ok := types[src]; {
+				case !ok:
+					status = "missing"
+				case typ != vault.TypeGroup:
+					status = "not a group"
+				case !storedFields[src][field]:
+					status = "not a stored field"
+				}
+			}
+			if status != "ok" {
+				dangling++
+			}
+			rows = append(rows, linkRef{group: n, key: k, target: ref, status: status})
 		}
 	}
 

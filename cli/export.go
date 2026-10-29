@@ -18,7 +18,7 @@ func newExportCmd(a *app) *cobra.Command {
 		only        []string
 		except      []string
 		output      string
-		force       bool
+		replace     bool
 		materialize string
 	)
 
@@ -36,7 +36,7 @@ func newExportCmd(a *app) *cobra.Command {
 			"  eval \"$(sanduk export --format shell)\"   # entry from " + vault.ProjectFileName + "\n\n" +
 			"Prefer --output over a shell redirect: it writes the file with mode 0600\n" +
 			"(on Unix), whereas `export ... > .env` inherits your umask (often 0644).\n" +
-			"--output replaces the whole file and refuses an existing one unless --force\n" +
+			"--output replaces the whole file and refuses an existing one unless --replace\n" +
 			"is given; it never appends. A symlink at that path is replaced by a\n" +
 			"regular file rather than written through. Note that even\n" +
 			"then an exported file is a plaintext copy of the secrets; prefer exec when the\n" +
@@ -56,8 +56,8 @@ func newExportCmd(a *app) *cobra.Command {
 			}
 
 			if output != "" {
-				if _, err := os.Lstat(output); err == nil && !force {
-					return fmt.Errorf("%s already exists; pass --force to replace it", output)
+				if _, err := os.Lstat(output); err == nil && !replace {
+					return fmt.Errorf("%s already exists; pass --replace to overwrite it", output)
 				} else if err != nil && !os.IsNotExist(err) {
 					return err
 				}
@@ -89,7 +89,7 @@ func newExportCmd(a *app) *cobra.Command {
 		"write to this file (mode 0600) instead of stdout")
 	cmd.Flags().StringVar(&materialize, "materialize", "",
 		"write file secrets as real files in this directory (0600 on Unix) and export their paths")
-	cmd.Flags().BoolVar(&force, "force", false,
+	cmd.Flags().BoolVar(&replace, "replace", false,
 		"replace an existing --output file (a symlink is replaced, not written through)")
 	cmd.ValidArgsFunction = a.completeSelector
 	return cmd

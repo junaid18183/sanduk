@@ -28,11 +28,10 @@ if settings=$("$SANDUK" config 2>&1 >/dev/null); then
 fi
 
 echo
-if ! "$SANDUK" add-group "$ENTRY" --from-dotenv demo.env \
-    --description "sanduk demo project"; then
+if ! "$SANDUK" import demo.env --group "$ENTRY"; then
   echo >&2
-  echo "That failed. If the group already exists, refresh it field by field:" >&2
-  echo "  $SANDUK group set $ENTRY --from-dotenv demo.env" >&2
+  echo "That failed. If the group already exists, merge it field by field:" >&2
+  echo "  $SANDUK group set -g $ENTRY --from-dotenv demo.env" >&2
   exit 1
 fi
 

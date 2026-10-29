@@ -3,6 +3,58 @@
 sanduk is pre-1.0 (`0.0.x`). A release may change behaviour when that closes a
 security hole; each such change is listed under **Breaking**.
 
+## 0.0.9 — 2026-10-29
+
+### Added
+
+- **`group link` can point at one field of another group.**
+  `sanduk group link maktub ELEVENLABS_API_KEY=ElevenLabs/elevenlabs_siddik`
+  makes the variable come from that stored field, so a group of provider keys
+  can feed each project directly. Nothing is copied, the field stays the single
+  source of truth, and a field link may only name a value the other group
+  stores itself, so resolution stays one hop deep. `doctor --links` checks these
+  links too.
+
+- **An empty group.** `sanduk add-group NAME` with no `--field` or `--from-json`
+  creates a group with no variables yet, which `group set` fills in later. `exec`
+  and `export` warn when a selected group has none, instead of succeeding with
+  nothing injected. Emptying a group with `group unset` or `group unlink` leaves
+  it in place rather than refusing.
+
+### Changed
+
+- `add-group` binds a group to the current folder when no `.git` exists above it,
+  as `init` already does. Before, it created a global group there with no note.
+- A target containing `/` is now read as `Group/FIELD`. A flat secret whose
+  name contains `/` can no longer be linked by its bare name; rename it. Existing
+  links to such a secret keep working, since they are stored separately.
+- A group command takes the group as `-g GROUP`, not a positional argument.
+  Without `-g` it edits the entry of the approved `.sanduk.toml` here, the same
+  default `exec` and `export` use, and it says what to pass when there is none.
+- `group link` and `group set` refuse a group that does not exist. Only
+  `add-group` creates one.
+
+### Breaking
+
+- `sanduk group <verb> <group> …` is now `sanduk group <verb> -g <group> …` for
+  `set`, `unset`, `show`, `link` and `unlink`.
+- `sanduk group get <group> KEY` is removed. Use `sanduk get <group> --field KEY`.
+- `sanduk get --all` is removed. Use `sanduk export <group>` for every field.
+- `sanduk list --all` is removed. Use `sanduk list --scope all`.
+- `sanduk export --force` is now `--replace`, the word `add`, `add-group` and
+  `import` already use. `get --force` (print to a non-terminal) is unchanged.
+- `sanduk add` refuses an existing entry unless `--replace` is given, and points a
+  flat secret at `rotate`. `--from-file` is removed from `add` and `rotate`: pipe
+  the value in (`sanduk add NAME < key.txt`), or store a file with `add-file`.
+- `sanduk group set --from-env` takes the variable name for the one KEY it
+  fills (`--from-env VAR`), matching `add`, instead of a bare flag over several
+  keys.
+- `sanduk add-group --no-project` is now `--global`, and `add-group --from-dotenv`
+  is removed. Use `sanduk import FILE --group NAME`, or `sanduk init NAME
+  --from-dotenv FILE` in a repository, which also writes the project file.
+- `sanduk group link --description` is removed, since a link no longer creates
+  its group.
+
 ## 0.0.8 — 2026-10-26
 
 Secrets are shared down a directory tree, not just inside one repository: the

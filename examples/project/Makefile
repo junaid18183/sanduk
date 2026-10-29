@@ -23,7 +23,7 @@ doctor: ## compare the vault entry against .env.example
 	$(SANDUK) doctor $(ENTRY) --template .env.example
 
 show: ## print the entry's field names (never its values)
-	$(SANDUK) group show $(ENTRY)
+	$(SANDUK) group show -g $(ENTRY)
 
 dev: ## run ./check.sh with the secrets injected into that process only
 	$(SANDUK) exec $(ENTRY) -- ./check.sh
@@ -32,8 +32,8 @@ list: ## list the entries in the vault
 	$(SANDUK) list
 
 add-legacy: ## add the key `make doctor` reports as missing
-	@echo "$(SANDUK) group set $(ENTRY) LEGACY_TOKEN --from-env"
-	@LEGACY_TOKEN=demo-legacy-token-not-secret $(SANDUK) group set $(ENTRY) LEGACY_TOKEN --from-env
+	@echo "$(SANDUK) group set -g $(ENTRY) LEGACY_TOKEN --from-env LEGACY_TOKEN"
+	@LEGACY_TOKEN=demo-legacy-token-not-secret $(SANDUK) group set -g $(ENTRY) LEGACY_TOKEN --from-env LEGACY_TOKEN
 
 clean: ## remove the demo entry from the vault
 	$(SANDUK) remove $(ENTRY) --yes

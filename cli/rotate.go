@@ -9,16 +9,15 @@ import (
 
 func newRotateCmd(a *app) *cobra.Command {
 	var (
-		fromEnv  string
-		fromFile string
-		expires  string
+		fromEnv string
+		expires string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "rotate <name>",
 		Short: "Replace the value of an existing flat secret",
 		Long: "Replace the value of an existing flat secret, keeping its name and\n" +
-			"metadata intact.\n\n" +
+			"metadata intact. The value comes from a prompt, --from-env, or stdin.\n\n" +
 			"--expires moves the rotation deadline at the same time, which is the\n" +
 			"moment you actually know the new date:\n\n" +
 			"  sanduk rotate stripe --expires 2027-04-01",
@@ -35,7 +34,7 @@ func newRotateCmd(a *app) *cobra.Command {
 				return err
 			}
 			if e.Type != vault.TypeSecret {
-				return fmt.Errorf("%q is a group; update it field by field with \"sanduk group set\"", name)
+				return fmt.Errorf("%q is a group; update its fields with \"sanduk group set -g %s KEY\"", name, name)
 			}
 
 			if expires != "" && expires != expiryNone {
@@ -44,7 +43,7 @@ func newRotateCmd(a *app) *cobra.Command {
 				}
 			}
 
-			value, err := readSecret(fromEnv, fromFile, true)
+			value, err := readSecret(fromEnv, "", true)
 			if err != nil {
 				return err
 			}
@@ -64,9 +63,7 @@ func newRotateCmd(a *app) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&fromEnv, "from-env", "", "read the new value from this environment variable")
-	cmd.Flags().StringVar(&fromFile, "from-file", "", "read the new value from this file")
 	cmd.Flags().StringVar(&expires, "expires", "", "move the rotation deadline to YYYY-MM-DD, or \"none\" to clear it")
-	cmd.MarkFlagsMutuallyExclusive("from-env", "from-file")
 	cmd.ValidArgsFunction = a.completeEntryNames
 	return cmd
 }

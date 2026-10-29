@@ -343,11 +343,14 @@ func (a *app) mcpDescribeEntry(name string) (map[string]any, error) {
 		out.Variables = []string{cfg.EnvNameForSecret(name)}
 		out.Description = cfg.Files[name].Description
 	case vault.TypeGroup:
-		vars := make([]string, 0, len(e.Fields)+len(e.Links))
+		vars := make([]string, 0, e.FieldCount())
 		for k := range e.Fields {
 			vars = append(vars, k)
 		}
 		for k := range e.Links {
+			vars = append(vars, k)
+		}
+		for k := range e.FieldLinks {
 			vars = append(vars, k)
 		}
 		sort.Strings(vars)

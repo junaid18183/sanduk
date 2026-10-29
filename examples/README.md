@@ -37,10 +37,10 @@ The Makefile is a thin wrapper; these are the same steps without it.
 
 ```sh
 # 1. Load the values. The group name is a vault entry, not a file.
-sanduk add-group demo --from-dotenv demo.env --description "sanduk demo project"
+sanduk import demo.env --group demo
 
 # 2. Look at what is stored without reading any value.
-sanduk group show demo     # one field name per line
+sanduk group show -g demo  # one field name per line
 sanduk list                # names, types and env mappings only
 
 # 3. Run something with the secrets injected. They exist only in this child:
@@ -65,7 +65,7 @@ sanduk doctor demo --template .env.example
 # 7. Fix the drift for one key, then check again. --from-env reads each named
 #    key from the environment variable of the same name.
 export LEGACY_TOKEN=demo-legacy-token-not-secret
-sanduk group set demo LEGACY_TOKEN --from-env
+sanduk group set -g demo LEGACY_TOKEN --from-env LEGACY_TOKEN
 unset LEGACY_TOKEN
 sanduk doctor demo --template .env.example
 

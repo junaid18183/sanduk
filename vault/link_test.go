@@ -113,17 +113,16 @@ func TestLinkRejectsAnInvalidEnvName(t *testing.T) {
 	}
 }
 
-func TestLinkCreatesTheGroupWhenAbsent(t *testing.T) {
+// Only add-group creates a group, so a link into a missing one is refused and
+// nothing is written.
+func TestLinkRefusesAMissingGroup(t *testing.T) {
 	v := linkedVault(t)
-	if err := v.LinkGroupField("fresh", "ELEVENLABS_API_KEY", "elevenlabs"); err != nil {
-		t.Fatalf("link: %v", err)
+	err := v.LinkGroupField("fresh", "ELEVENLABS_API_KEY", "elevenlabs")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("link into a missing group: err = %v", err)
 	}
-	e, err := v.Get("fresh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if e.Type != TypeGroup || len(e.Links) != 1 {
-		t.Fatalf("entry = %+v", e)
+	if ok, _ := v.Exists("fresh"); ok {
+		t.Fatal("a refused link still created the group")
 	}
 }
 
@@ -168,14 +167,24 @@ func TestUnlinkLeavesTheSecretAlone(t *testing.T) {
 	}
 }
 
-func TestUnlinkRefusesToEmptyTheEntry(t *testing.T) {
+func TestUnlinkCanEmptyAGroup(t *testing.T) {
 	v := linkedVault(t)
+	if err := v.AddGroup("solo", map[string]string{"SOLO_VAR": "x"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := v.LinkGroupField("solo", "ELEVENLABS_API_KEY", "elevenlabs"); err != nil {
 		t.Fatal(err)
 	}
-	err := v.UnlinkGroupField("solo", []string{"ELEVENLABS_API_KEY"})
-	if err == nil || !strings.Contains(err.Error(), "sanduk remove") {
-		t.Fatalf("err = %v, want a refusal pointing at remove", err)
+	// Leave the link as the group's only variable, so removing it would empty
+	// the entry.
+	if err := v.UnsetGroupFields("solo", []string{"SOLO_VAR"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.UnlinkGroupField("solo", []string{"ELEVENLABS_API_KEY"}); err != nil {
+		t.Fatalf("unlink of the last link: %v", err)
+	}
+	if ok, _ := v.Exists("solo"); !ok {
+		t.Fatal("unlinking the last link removed the group")
 	}
 }
 

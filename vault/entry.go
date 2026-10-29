@@ -3,6 +3,7 @@ package vault
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Entry types stored in the keychain.
@@ -20,15 +21,17 @@ const (
 //
 // Links are the one part of an entry that holds no secret material: they map an
 // environment variable name to the name of a flat secret whose value is read at
-// resolve time. They live here rather than in the metadata config so that a
-// group stays self-contained in the backend — losing or moving config.toml must
-// never change which variables an entry injects.
+// resolve time. FieldLinks do the same for a stored field of another group,
+// written "Group/FIELD". They live here rather than in the metadata config so
+// that a group stays self-contained in the backend — losing or moving
+// config.toml must never change which variables an entry injects.
 type Entry struct {
-	Version int               `json:"version"`
-	Type    string            `json:"type"`
-	Value   string            `json:"value,omitempty"`
-	Fields  map[string]string `json:"fields,omitempty"`
-	Links   map[string]string `json:"links,omitempty"`
+	Version    int               `json:"version"`
+	Type       string            `json:"type"`
+	Value      string            `json:"value,omitempty"`
+	Fields     map[string]string `json:"fields,omitempty"`
+	Links      map[string]string `json:"links,omitempty"`
+	FieldLinks map[string]string `json:"field_links,omitempty"`
 
 	// Data is a file secret's contents, and Filename the basename it should
 	// be given when materialized (some tools key off the extension). Data is
@@ -74,14 +77,13 @@ func (e *Entry) validate() error {
 		// Only a group composes other entries. A flat secret carrying links
 		// would make the link graph unbounded, which linkTargetType relies on
 		// being one level deep.
-		if len(e.Links) > 0 {
+		if len(e.Links) > 0 || len(e.FieldLinks) > 0 {
 			return fmt.Errorf("secret entry must not have links")
 		}
 	case TypeGroup:
-		if len(e.Fields)+len(e.Links) == 0 {
-			return fmt.Errorf("group entry has no fields")
-		}
-		if err := validateLinks(e.Fields, e.Links); err != nil {
+		// A group may be empty: add-group creates one before any field is
+		// set, and group set fills it in later.
+		if err := validateLinks(e); err != nil {
 			return err
 		}
 		if len(e.Data) > 0 {
@@ -94,7 +96,7 @@ func (e *Entry) validate() error {
 		// A file secret is one opaque blob. Letting it also carry fields or
 		// links would give it two resolution paths, and only one of them can
 		// be the variable the child receives.
-		if e.Value != "" || len(e.Fields) > 0 || len(e.Links) > 0 {
+		if e.Value != "" || len(e.Fields) > 0 || len(e.Links) > 0 || len(e.FieldLinks) > 0 {
 			return fmt.Errorf("file entry must carry only data")
 		}
 	default:
@@ -106,11 +108,21 @@ func (e *Entry) validate() error {
 // validateLinks checks a group's links on write and again on read, so a
 // hand-edited backend cannot produce a group that injects an invalid variable
 // name or addresses an unusable entry.
-func validateLinks(fields, links map[string]string) error {
-	for env, target := range links {
-		if _, dup := fields[env]; dup {
+func validateLinks(e *Entry) error {
+	for env := range e.Fields {
+		if _, dup := e.Links[env]; dup {
 			return fmt.Errorf("%s is both a stored field and a link", env)
 		}
+		if _, dup := e.FieldLinks[env]; dup {
+			return fmt.Errorf("%s is both a stored field and a link", env)
+		}
+	}
+	for env := range e.Links {
+		if _, dup := e.FieldLinks[env]; dup {
+			return fmt.Errorf("%s is linked twice", env)
+		}
+	}
+	for env, target := range e.Links {
 		if err := ValidateEnvName(env); err != nil {
 			return err
 		}
@@ -118,5 +130,37 @@ func validateLinks(fields, links map[string]string) error {
 			return fmt.Errorf("link %s: %w", env, err)
 		}
 	}
+	for env, ref := range e.FieldLinks {
+		if err := ValidateEnvName(env); err != nil {
+			return err
+		}
+		if _, _, ok := SplitFieldRef(ref); !ok {
+			return fmt.Errorf("link %s: %q is not Group/FIELD", env, ref)
+		}
+	}
 	return nil
+}
+
+// FieldCount is the number of variables a group contributes, stored and linked
+// alike.
+func (e *Entry) FieldCount() int {
+	return len(e.Fields) + len(e.Links) + len(e.FieldLinks)
+}
+
+// IsFieldRef reports whether a link target names a group's field rather than a
+// flat secret. Only the field form contains "/": a flat secret's name may
+// legally contain one, so a target written with it is read as Group/FIELD.
+func IsFieldRef(target string) bool {
+	return strings.Contains(target, "/")
+}
+
+// SplitFieldRef splits "Group/FIELD" at the last "/". A variable name never
+// contains one, so the field is always the part after it, while the group may
+// itself contain "/".
+func SplitFieldRef(ref string) (group, field string, ok bool) {
+	i := strings.LastIndex(ref, "/")
+	if i <= 0 || i == len(ref)-1 {
+		return "", "", false
+	}
+	return ref[:i], ref[i+1:], true
 }

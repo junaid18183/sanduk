@@ -60,9 +60,9 @@ note "...and it was never in your own shell:"
 run "echo \"this shell sees: \${OPENAI_API_KEY:-<unset>}\""
 
 note "Share one key across projects with a link, not a copy."
-run "sanduk add-group warden --from-dotenv <(printf 'DB_URL=postgres://localhost/app\n')"
-run "sanduk group link warden openai"
-run "sanduk group show warden --long"
+run "sanduk import <(printf 'DB_URL=postgres://localhost/app\n') --format dotenv --group warden"
+run "sanduk group link -g warden openai"
+run "sanduk group show -g warden --long"
 
 note "Rotate the secret once; every group that links it follows."
 run "printf 'sk-test-ROTATED\n' | sanduk rotate openai"

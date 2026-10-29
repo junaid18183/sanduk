@@ -209,7 +209,7 @@ func TestGroupLinkRefusesAFileSecret(t *testing.T) {
 	if _, err := runCmd(t, `{"A_KEY":"v"}`, "add-group", "warden", "--from-json", "-"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runCmd(t, "", "group", "link", "warden", "gcp")
+	_, err := runCmd(t, "", "group", "link", "-g", "warden", "gcp")
 	if err == nil || !strings.Contains(err.Error(), "flat secret") {
 		t.Fatalf("err = %v, want a flat-secret refusal", err)
 	}

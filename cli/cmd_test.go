@@ -155,10 +155,10 @@ func TestExportOutputRefusesOverwrite(t *testing.T) {
 		t.Fatalf("export: %v", err)
 	}
 	if _, err := runCmd(t, "", "export", "openai", "-f", "dotenv", "-o", dst); err == nil {
-		t.Fatal("export -o replaced an existing file without --force")
+		t.Fatal("export -o replaced an existing file without --replace")
 	}
-	if _, err := runCmd(t, "", "export", "openai", "-f", "dotenv", "-o", dst, "--force"); err != nil {
-		t.Fatalf("export --force: %v", err)
+	if _, err := runCmd(t, "", "export", "openai", "-f", "dotenv", "-o", dst, "--replace"); err != nil {
+		t.Fatalf("export --replace: %v", err)
 	}
 }
 
@@ -257,7 +257,7 @@ func TestAddGroupFromJSONFile(t *testing.T) {
 	if _, err := runCmd(t, `{"A":"1"}`, "add-group", "other", "--from-json", "-"); err != nil {
 		t.Fatalf("add-group --from-json -: %v", err)
 	}
-	out, err := runCmd(t, "", "group", "show", "warden")
+	out, err := runCmd(t, "", "group", "show", "-g", "warden")
 	if err != nil || !strings.Contains(out, "API_KEY") || !strings.Contains(out, "DB_URL") {
 		t.Fatalf("group show = %q, %v", out, err)
 	}
@@ -271,7 +271,7 @@ func TestAddRefusesGroupDespiteDriftedMetadata(t *testing.T) {
 	if err := writeFileString(src, "DB_URL=postgres://test\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCmd(t, "", "add-group", "warden", "--from-dotenv", src); err != nil {
+	if _, err := runCmd(t, "", "add-group", "warden", "--from-json", dotenvAsJSON(t, src)); err != nil {
 		t.Fatalf("add-group: %v", err)
 	}
 	if err := writeFileString(cfg, "[secrets.warden]\n"); err != nil {
