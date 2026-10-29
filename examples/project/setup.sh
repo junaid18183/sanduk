@@ -31,7 +31,7 @@ echo
 if ! "$SANDUK" import demo.env --group "$ENTRY"; then
   echo >&2
   echo "That failed. If the group already exists, merge it field by field:" >&2
-  echo "  $SANDUK group set -g $ENTRY --from-dotenv demo.env" >&2
+  echo "  $SANDUK group add -g $ENTRY --from-dotenv demo.env --replace" >&2
   exit 1
 fi
 

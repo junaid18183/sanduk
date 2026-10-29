@@ -82,7 +82,7 @@ func (e *Entry) validate() error {
 		}
 	case TypeGroup:
 		// A group may be empty: add-group creates one before any field is
-		// set, and group set fills it in later.
+		// set, and group add fills it in later.
 		if err := validateLinks(e); err != nil {
 			return err
 		}

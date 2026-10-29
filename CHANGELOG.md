@@ -3,6 +3,27 @@
 sanduk is pre-1.0 (`0.0.x`). A release may change behaviour when that closes a
 security hole; each such change is listed under **Breaking**.
 
+## 0.0.10 — 2026-10-29
+
+### Breaking
+
+- `sanduk group set` is now `sanduk group add`, and `sanduk group unset` is now
+  `sanduk group remove`, matching `add` and `remove` for flat secrets.
+- `group add` refuses a field the group already has unless `--replace` is given,
+  as `add` refuses an existing entry. Before, `group set` overwrote silently.
+
+### Changed
+
+- `list --scope all` names the directory that owns a project entry, as
+  `project (~/work/x)`, instead of a bare `project`. An entry the current folder
+  resolves reads `project (here)`, as before.
+
+### Added
+
+- `sanduk group rotate [-g GROUP] KEY` replaces the stored value of a field that
+  already exists, as `rotate` does for a flat secret. It refuses a field the
+  group does not store, so a new one still goes through `group add`.
+
 ## 0.0.9 — 2026-10-29
 
 ### Added

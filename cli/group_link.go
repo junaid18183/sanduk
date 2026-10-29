@@ -88,7 +88,7 @@ func newGroupUnlinkCmd(a *app) *cobra.Command {
 		Use:   "unlink [-g GROUP] ENVVAR [ENVVAR...]",
 		Short: "Remove a link from a group, leaving its target untouched",
 		Long: "Drop a linked variable from a group. Only the pointer is removed; the target\n" +
-			"it addressed is not changed or deleted. Use \"sanduk group unset\" for a\n" +
+			"it addressed is not changed or deleted. Use \"sanduk group remove\" for a\n" +
 			"variable whose value is stored in the group itself.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

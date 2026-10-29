@@ -21,7 +21,7 @@ func newGroupCmd(a *app) *cobra.Command {
 			"Each takes -g GROUP. Without it, the group is the entry of the approved\n" +
 			".sanduk.toml in this directory, the same default exec and export use.",
 	}
-	cmd.AddCommand(newGroupListCmd(a), newGroupSetCmd(a), newGroupUnsetCmd(a), newGroupShowCmd(a),
+	cmd.AddCommand(newGroupListCmd(a), newGroupAddCmd(a), newGroupRemoveCmd(a), newGroupRotateCmd(a), newGroupShowCmd(a),
 		newGroupLinkCmd(a), newGroupUnlinkCmd(a))
 	return cmd
 }
@@ -71,30 +71,34 @@ func requireGroup(v *vault.Vault, name string) error {
 	return nil
 }
 
-func newGroupSetCmd(a *app) *cobra.Command {
+func newGroupAddCmd(a *app) *cobra.Command {
 	var (
 		group      string
 		fromEnv    string
 		fromDotenv string
 		descFlag   string
 		expires    string
+		replace    bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "set [-g GROUP] [KEY...]",
-		Short: "Add or replace individual fields of an existing group",
-		Long: "Merge fields into a group. Only the named fields change; every other field\n" +
-			"keeps its value. The group must already exist: create it with add-group.\n\n" +
+		Use:   "add [-g GROUP] [KEY...]",
+		Short: "Add fields to an existing group",
+		Long: "Add fields to a group. Only the named fields change; every other field keeps\n" +
+			"its value. A field that already exists is refused unless --replace is given,\n" +
+			"the same rule add applies to an existing entry. The group must already exist:\n" +
+			"create it with add-group.\n\n" +
 			"Values are never taken from the command line, where they would be visible in\n" +
 			"process listings. They come from an echo-disabled prompt, from stdin when a\n" +
 			"single KEY is named and stdin is a pipe, from one environment variable, or\n" +
 			"from a .env file:\n\n" +
-			"  sanduk group set -g warden DB_PASSWORD\n" +
-			"  echo \"$new\" | sanduk group set -g warden DB_PASSWORD\n" +
-			"  sanduk group set -g warden DB_PASSWORD --from-env NEW_DB_PASSWORD\n" +
-			"  sanduk group set -g warden --from-dotenv patch.env\n\n" +
-			"When a field already exists its current value is shown redacted, and the new\n" +
-			"value is asked for twice, so a typo cannot be stored.",
+			"  sanduk group add -g warden DB_PASSWORD\n" +
+			"  echo \"$new\" | sanduk group add -g warden DB_PASSWORD\n" +
+			"  sanduk group add -g warden DB_PASSWORD --from-env NEW_DB_PASSWORD\n" +
+			"  sanduk group add -g warden --from-dotenv patch.env\n" +
+			"  sanduk group add -g warden DB_PASSWORD --replace\n\n" +
+			"With --replace, a field that already exists shows its current value redacted,\n" +
+			"and the new value is asked for twice, so a typo cannot be stored.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, err := a.resolveGroup(group)
@@ -115,6 +119,7 @@ func newGroupSetCmd(a *app) *cobra.Command {
 			if err := requireGroup(v, name); err != nil {
 				return err
 			}
+			current := currentGroupFields(v, name)
 
 			m := map[string]string{}
 			switch {
@@ -124,6 +129,9 @@ func newGroupSetCmd(a *app) *cobra.Command {
 				}
 				parsed, err := readDotenvFile(fromDotenv)
 				if err != nil {
+					return err
+				}
+				if err := refuseExistingFields(name, current, sortedMapKeys(parsed), replace); err != nil {
 					return err
 				}
 				m = parsed
@@ -136,20 +144,25 @@ func newGroupSetCmd(a *app) *cobra.Command {
 				if !ok || val == "" {
 					return fmt.Errorf("environment variable %s is not set or empty", fromEnv)
 				}
+				if err := refuseExistingFields(name, current, keys, replace); err != nil {
+					return err
+				}
 				m[keys[0]] = val
 
 			default:
 				if len(keys) == 0 {
 					return fmt.Errorf("no fields given; name at least one KEY, or use --from-dotenv")
 				}
+				// Refuse before prompting, so nothing is typed for a field
+				// that would then be turned away.
+				if err := refuseExistingFields(name, current, keys, replace); err != nil {
+					return err
+				}
 				// Show the redacted current value only to someone at the
 				// prompt; a piped run would put it in a log.
-				var current map[string]string
-				if isTerminal(os.Stdin) {
-					current = currentGroupFields(v, name)
-				}
+				showCurrent := isTerminal(os.Stdin)
 				for _, k := range keys {
-					if cur, ok := current[k]; ok {
+					if cur, ok := current[k]; ok && showCurrent {
 						a.warnf("%s: %s (current)\n", k, redact(cur))
 					}
 					val, err := readGroupFieldValue(k, len(keys) == 1)
@@ -173,7 +186,7 @@ func newGroupSetCmd(a *app) *cobra.Command {
 				}
 			}
 
-			a.warnf("Updated %d field(s) in group %q\n", len(m), name)
+			a.warnf("Added %d field(s) to group %q\n", len(m), name)
 			// A project file that lists the keys it expects should not need
 			// hand-editing every time the group grows one.
 			a.syncProjectOnly(name, sortedMapKeys(m), nil)
@@ -183,7 +196,8 @@ func newGroupSetCmd(a *app) *cobra.Command {
 
 	cmd.Flags().StringVar(&fromEnv, "from-env", "",
 		"read the value of the one KEY from this environment variable")
-	cmd.Flags().StringVar(&fromDotenv, "from-dotenv", "", "merge the fields of a .env file")
+	cmd.Flags().StringVar(&fromDotenv, "from-dotenv", "", "add the fields of a .env file")
+	cmd.Flags().BoolVar(&replace, "replace", false, "overwrite fields that already exist")
 	cmd.Flags().StringVar(&descFlag, "description", "", "set the group's description")
 	cmd.Flags().StringVar(&expires, "expires", "", "rotation deadline as YYYY-MM-DD, or \"none\" to clear it")
 	cmd.MarkFlagsMutuallyExclusive("from-env", "from-dotenv")
@@ -192,14 +206,34 @@ func newGroupSetCmd(a *app) *cobra.Command {
 }
 
 // currentGroupFields returns the existing fields of a group, or nil when the
-// entry does not exist or is not a group. It is used only to show a redacted
-// "current" value before an overwrite.
+// entry does not exist or is not a group. A nil result refuses nothing: the
+// merge that follows reads the entry again and reports any real error.
 func currentGroupFields(v *vault.Vault, name string) map[string]string {
 	e, err := v.Get(name)
 	if err != nil || e.Type != vault.TypeGroup {
 		return nil
 	}
 	return e.Fields
+}
+
+// refuseExistingFields fails when one of keys is already a field of the group
+// and replace is not set. Overwriting a stored value destroys it, so that needs
+// the flag, the same rule add applies to an existing entry.
+func refuseExistingFields(group string, current map[string]string, keys []string, replace bool) error {
+	if replace {
+		return nil
+	}
+	var taken []string
+	for _, k := range keys {
+		if _, ok := current[k]; ok {
+			taken = append(taken, k)
+		}
+	}
+	if len(taken) > 0 {
+		return fmt.Errorf("group %q already has %s; pass --replace to overwrite them",
+			group, strings.Join(taken, ", "))
+	}
+	return nil
 }
 
 // readGroupFieldValue reads one field's new value. With a single key named and a
@@ -236,11 +270,11 @@ func readGroupFieldValue(key string, allowStdin bool) (string, error) {
 	return val, nil
 }
 
-func newGroupUnsetCmd(a *app) *cobra.Command {
+func newGroupRemoveCmd(a *app) *cobra.Command {
 	var group string
 
 	cmd := &cobra.Command{
-		Use:   "unset [-g GROUP] KEY [KEY...]",
+		Use:   "remove [-g GROUP] KEY [KEY...]",
 		Short: "Remove fields from a group",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -265,6 +299,60 @@ func newGroupUnsetCmd(a *app) *cobra.Command {
 			return nil
 		},
 	}
+	groupFlag(a, cmd, &group)
+	return cmd
+}
+
+func newGroupRotateCmd(a *app) *cobra.Command {
+	var (
+		group   string
+		fromEnv string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "rotate [-g GROUP] KEY",
+		Short: "Replace the value of one existing field of a group",
+		Long: "Replace the stored value of a field that already exists, keeping its name\n" +
+			"and the other fields intact. The value comes from a prompt, --from-env, or\n" +
+			"stdin, the same as group add. A field the group does not store is refused:\n" +
+			"use group add for a new one.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, err := a.resolveGroup(group)
+			if err != nil {
+				return err
+			}
+			key := args[0]
+			if err := vault.ValidateEnvName(key); err != nil {
+				return err
+			}
+
+			v, err := a.openVault()
+			if err != nil {
+				return err
+			}
+			// Check before prompting, so a value is not typed for a field that
+			// would then be refused. RotateGroupField checks again on write.
+			if err := requireGroup(v, name); err != nil {
+				return err
+			}
+			if _, ok := currentGroupFields(v, name)[key]; !ok {
+				return fmt.Errorf("group %q has no stored field %q; add it with \"sanduk group add -g %s %s\"", name, key, name, key)
+			}
+			value, err := readSecret(fromEnv, "", true)
+			if err != nil {
+				return err
+			}
+			if err := v.RotateGroupField(name, key, value); err != nil {
+				return err
+			}
+
+			a.warnf("Rotated %s in group %q\n", key, name)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&fromEnv, "from-env", "", "read the new value from this environment variable")
 	groupFlag(a, cmd, &group)
 	return cmd
 }

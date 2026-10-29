@@ -188,7 +188,7 @@ func TestUnlinkCanEmptyAGroup(t *testing.T) {
 	}
 }
 
-func TestUnsetAndUnlinkPointAtEachOther(t *testing.T) {
+func TestRemoveAndUnlinkPointAtEachOther(t *testing.T) {
 	v := linkedVault(t)
 	if err := v.LinkGroupField("maktub", "ELEVENLABS_API_KEY", "elevenlabs"); err != nil {
 		t.Fatal(err)
@@ -199,7 +199,7 @@ func TestUnsetAndUnlinkPointAtEachOther(t *testing.T) {
 		t.Fatalf("unset of a link: %v, want a pointer to unlink", err)
 	}
 	err = v.UnlinkGroupField("maktub", []string{"MAKTUB_DB_URL"})
-	if err == nil || !strings.Contains(err.Error(), "group unset") {
+	if err == nil || !strings.Contains(err.Error(), "group remove") {
 		t.Fatalf("unlink of a stored field: %v, want a pointer to unset", err)
 	}
 }

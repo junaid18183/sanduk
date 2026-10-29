@@ -506,8 +506,8 @@ func TestIncludedEntriesAreMergedBeneathTheProject(t *testing.T) {
 	}
 
 	// The project's own entry wins on a variable both provide.
-	if _, err := runCmd(t, "sk-project-value", "group", "set", "-g", "warden", "OPENAI_API_KEY"); err != nil {
-		t.Fatalf("group set: %v", err)
+	if _, err := runCmd(t, "sk-project-value", "group", "add", "-g", "warden", "OPENAI_API_KEY"); err != nil {
+		t.Fatalf("group add: %v", err)
 	}
 	out, err = runCmd(t, "", "export", "--format", "dotenv")
 	if err != nil {
@@ -575,8 +575,8 @@ func TestOnlyFollowsTheGroup(t *testing.T) {
 	}
 	path := filepath.Join(dir, vault.ProjectFileName)
 
-	if _, err := runCmd(t, "sk-test-value", "group", "set", "-g", "warden", "STRIPE_KEY"); err != nil {
-		t.Fatalf("group set: %v", err)
+	if _, err := runCmd(t, "sk-test-value", "group", "add", "-g", "warden", "STRIPE_KEY"); err != nil {
+		t.Fatalf("group add: %v", err)
 	}
 	b, _ := os.ReadFile(path)
 	if !strings.Contains(string(b), `only = ["DB_URL", "STRIPE_KEY"]`) {
@@ -591,8 +591,8 @@ func TestOnlyFollowsTheGroup(t *testing.T) {
 		t.Fatalf("exec after the rewrite: %v", err)
 	}
 
-	if _, err := runCmd(t, "", "group", "unset", "-g", "warden", "STRIPE_KEY"); err != nil {
-		t.Fatalf("group unset: %v", err)
+	if _, err := runCmd(t, "", "group", "remove", "-g", "warden", "STRIPE_KEY"); err != nil {
+		t.Fatalf("group remove: %v", err)
 	}
 	b, _ = os.ReadFile(path)
 	if strings.Contains(string(b), "STRIPE_KEY") {
@@ -605,8 +605,8 @@ func TestOnlyFollowsTheGroup(t *testing.T) {
 	if _, err := runCmd(t, "", "init", "plain", "--from-dotenv", src); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if _, err := runCmd(t, "sk-test-value", "group", "set", "-g", "plain", "NEW_KEY"); err != nil {
-		t.Fatalf("group set: %v", err)
+	if _, err := runCmd(t, "sk-test-value", "group", "add", "-g", "plain", "NEW_KEY"); err != nil {
+		t.Fatalf("group add: %v", err)
 	}
 	b, _ = os.ReadFile(filepath.Join(plain, vault.ProjectFileName))
 	if strings.Contains(string(b), "only") {

@@ -40,11 +40,11 @@ func TestGroupCommandsNeedAGroupOutsideAProject(t *testing.T) {
 }
 
 // Only add-group creates a group, so a mistyped -g cannot start one.
-func TestGroupSetRefusesAMissingGroup(t *testing.T) {
+func TestGroupAddRefusesAMissingGroup(t *testing.T) {
 	testEnv(t)
-	_, err := runCmd(t, "sk-test-value", "group", "set", "-g", "nope", "API_KEY")
+	_, err := runCmd(t, "sk-test-value", "group", "add", "-g", "nope", "API_KEY")
 	if err == nil || !strings.Contains(err.Error(), "add-group") {
-		t.Fatalf("group set into a missing group = %v, want an add-group refusal", err)
+		t.Fatalf("group add into a missing group = %v, want an add-group refusal", err)
 	}
 }
 

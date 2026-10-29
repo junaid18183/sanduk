@@ -119,13 +119,13 @@ func TestDoctorReportsMissingAndExtra(t *testing.T) {
 	}
 }
 
-func TestGroupSetUnsetShowGet(t *testing.T) {
+func TestGroupAddRemoveShowGet(t *testing.T) {
 	testEnv(t)
 	addWarden(t)
 
-	// group set KEY reads a single value from piped stdin.
-	if _, err := runCmd(t, "sk-test-stripe", "group", "set", "-g", "warden", "STRIPE_KEY"); err != nil {
-		t.Fatalf("group set: %v", err)
+	// group add KEY reads a single value from piped stdin.
+	if _, err := runCmd(t, "sk-test-stripe", "group", "add", "-g", "warden", "STRIPE_KEY"); err != nil {
+		t.Fatalf("group add: %v", err)
 	}
 	out, err := runCmd(t, "", "group", "show", "-g", "warden")
 	if err != nil {
@@ -147,21 +147,51 @@ func TestGroupSetUnsetShowGet(t *testing.T) {
 		t.Fatal("group get of an unknown field succeeded")
 	}
 
-	if _, err := runCmd(t, "", "group", "unset", "-g", "warden", "STRIPE_KEY"); err != nil {
-		t.Fatalf("group unset: %v", err)
+	// An existing field is refused without --replace, so the stored value
+	// survives; with --replace the new value takes its place.
+	if _, err := runCmd(t, "sk-test-other", "group", "add", "-g", "warden", "STRIPE_KEY"); err == nil {
+		t.Fatal("group add overwrote an existing field without --replace")
 	}
-	// A group may be emptied: it still exists, and group set fills it again.
-	if _, err := runCmd(t, "", "group", "unset", "-g", "warden", "API_KEY", "DB_URL"); err != nil {
-		t.Fatalf("group unset of every field: %v", err)
+	out, err = runCmd(t, "", "get", "warden", "--field", "STRIPE_KEY", "--force", "--reveal")
+	if err != nil || out != "sk-test-stripe\n" {
+		t.Fatalf("refused group add changed the field: %q, %v", out, err)
+	}
+	if _, err := runCmd(t, "sk-test-replaced", "group", "add", "-g", "warden", "STRIPE_KEY", "--replace"); err != nil {
+		t.Fatalf("group add --replace: %v", err)
+	}
+	out, err = runCmd(t, "", "get", "warden", "--field", "STRIPE_KEY", "--force", "--reveal")
+	if err != nil || out != "sk-test-replaced\n" {
+		t.Fatalf("group add --replace = %q, %v", out, err)
+	}
+
+	// group rotate replaces an existing field's value and nothing else, and
+	// refuses a field the group does not store.
+	if _, err := runCmd(t, "sk-test-rotated", "group", "rotate", "-g", "warden", "STRIPE_KEY"); err != nil {
+		t.Fatalf("group rotate: %v", err)
+	}
+	out, err = runCmd(t, "", "get", "warden", "--field", "STRIPE_KEY", "--force", "--reveal")
+	if err != nil || out != "sk-test-rotated\n" {
+		t.Fatalf("group rotate = %q, %v", out, err)
+	}
+	if _, err := runCmd(t, "sk-test-value", "group", "rotate", "-g", "warden", "NOPE"); err == nil {
+		t.Fatal("group rotate accepted a field the group does not store")
+	}
+
+	if _, err := runCmd(t, "", "group", "remove", "-g", "warden", "STRIPE_KEY"); err != nil {
+		t.Fatalf("group remove: %v", err)
+	}
+	// A group may be emptied: it still exists, and group add fills it again.
+	if _, err := runCmd(t, "", "group", "remove", "-g", "warden", "API_KEY", "DB_URL"); err != nil {
+		t.Fatalf("group remove of every field: %v", err)
 	}
 
 	// --from-env names the variable the one KEY takes its value from.
 	t.Setenv("REDIS_URL", "redis://test")
-	if _, err := runCmd(t, "", "group", "set", "-g", "warden", "REDIS_URL", "--from-env", "REDIS_URL"); err != nil {
-		t.Fatalf("group set --from-env: %v", err)
+	if _, err := runCmd(t, "", "group", "add", "-g", "warden", "REDIS_URL", "--from-env", "REDIS_URL"); err != nil {
+		t.Fatalf("group add --from-env: %v", err)
 	}
-	if _, err := runCmd(t, "", "group", "set", "-g", "warden", "LD_PRELOAD", "--from-env", "REDIS_URL"); err == nil {
-		t.Fatal("group set accepted LD_PRELOAD")
+	if _, err := runCmd(t, "", "group", "add", "-g", "warden", "LD_PRELOAD", "--from-env", "REDIS_URL"); err == nil {
+		t.Fatal("group add accepted LD_PRELOAD")
 	}
 }
 

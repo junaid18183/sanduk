@@ -63,7 +63,7 @@ cd ~/work/warden && sanduk init --from-template
 > are never taken from the command line, where `ps` would show them.
 >
 > An existing entry is never replaced silently: `add-group` asks you to use
-> `group set` (to merge) or to pass `--replace` (to overwrite). `add` likewise
+> `group add` (to add fields) or to pass `--replace` (to overwrite). `add` likewise
 > refuses an existing secret and points at `rotate`, which changes its value.
 
 > A runnable version of everything below lives in
@@ -156,7 +156,7 @@ Two rules keep links predictable:
   impossible by construction rather than by a depth limit.
 - **A variable is either stored in the group or linked, never both.** There is no
   precedence rule to remember; `group link` refuses a name the group already
-  stores, and tells you to `group unset` it first or link under another name.
+  stores, and tells you to `group remove` it first or link under another name.
 
 Links live in the vault entry, not in `config.toml`, so a group stays
 self-contained in the backend: losing or moving the metadata config can never
@@ -271,7 +271,7 @@ Start from the repository, before it has any secrets:
 cd ~/work/warden
 sanduk init                              # entry named after the directory
 sanduk init warden --from-dotenv .env    # or name it, and seed it now
-sanduk group set STRIPE_KEY              # fill it in afterwards: -g defaults to warden here
+sanduk group add STRIPE_KEY              # fill it in afterwards: -g defaults to warden here
 ```
 
 `sanduk init` writes `.sanduk.toml`, approves it, and records the directory
@@ -436,7 +436,7 @@ inherit = false     # ignore every project file above this directory
 
 `only` records the keys the project expects, and `--only` errors on a key the
 entry does not have, so a typo fails loudly. Once the list exists, sanduk
-keeps it in step: `group set`, `group unset`, `group link` and `group unlink`
+keeps it in step: `group add`, `group remove`, `group link` and `group unlink`
 add and remove keys in the file and re-approve it, preserving your comments.
 
 Delete the line to opt out for good — sanduk keeps such a list current, it
@@ -539,7 +539,8 @@ nothing: the listing says so and shows the vault as if the file were not
 there.
 
 `--scope all` shows everything with a `SCOPE` column, and `--scope project|member|global`
-shows one kind. The hidden count always goes to stderr, so a shorter list never
+shows one kind. A project entry names the directory that owns it, `project (~/work/x)`,
+or `project (here)` when the folder you are in resolves it. The hidden count always goes to stderr, so a shorter list never
 reads as a missing entry. Membership is tracked in `config.toml` as a
 `linked_by` hint, kept current by `group link`/`unlink` and rebuilt from the
 vault by `sanduk doctor --links --fix`; nothing resolves through it, so a stale
@@ -705,8 +706,9 @@ you want described with `--backend`/`--config` or the `SANDUK_*` variables.
 | `sanduk add <name>` | Add a new flat secret (`--as VAR`, `--from-env VAR`, stdin, `--description`, `--expires`, `--replace` to overwrite any entry). Refuses an existing secret; use `rotate`. |
 | `sanduk add-group <name>` | Create a group (`--from-json F\|-`, `--field KEY` prompts, `--description`, `--expires`, `--replace`, `--global`). With no fields it creates an empty group. Only this command creates a group. At a repository root, or in a folder with no `.git`, it also records the directory and writes `.sanduk.toml`. |
 | `sanduk add-file <name>` | Store a credential file, injected as a path (`--from-file F\|-`, `--as VAR`, `--filename`, `--description`, `--expires`, `--replace`). |
-| `sanduk group set [-g G] [KEY…]` | Merge fields into an existing group (prompt, stdin, `--from-env VAR` for the one KEY, `--from-dotenv F`, `--description`, `--expires`). |
-| `sanduk group unset [-g G] KEY…` | Remove fields from a group. |
+| `sanduk group add [-g G] [KEY…]` | Add fields to an existing group (prompt, stdin, `--from-env VAR` for the one KEY, `--from-dotenv F`, `--replace` to overwrite a field that exists, `--description`, `--expires`). |
+| `sanduk group remove [-g G] KEY…` | Remove fields from a group. |
+| `sanduk group rotate [-g G] KEY` | Replace the stored value of a field that already exists (prompt, stdin or `--from-env VAR`). Refuses a field the group does not store. |
 | `sanduk group link [-g G] [VAR=]<target>` | Point a group field at a flat secret, or at `Group/FIELD` (the `VAR=` form is required for that). |
 | `sanduk group unlink [-g G] KEY…` | Remove a link; the target it pointed at is untouched. |
 | `sanduk group list` | List every group and the directory it belongs to (`--here`, `--keys`, `--json`, `--names`). |

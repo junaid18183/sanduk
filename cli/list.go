@@ -426,6 +426,8 @@ func scopeLabel(e vault.Scoped) string {
 	switch {
 	case e.Current:
 		return vault.ScopeProject + " (here)"
+	case e.Scope == vault.ScopeProject && len(e.Owners) > 0:
+		return vault.ScopeProject + " (" + shortPath(e.Owners[0]) + ")"
 	case e.Scope == vault.ScopeMember && len(e.Owners) > 0:
 		return vault.ScopeMember + " of " + joinComma(e.Owners)
 	default:

@@ -34,7 +34,7 @@ func newRotateCmd(a *app) *cobra.Command {
 				return err
 			}
 			if e.Type != vault.TypeSecret {
-				return fmt.Errorf("%q is a group; update its fields with \"sanduk group set -g %s KEY\"", name, name)
+				return fmt.Errorf("%q is a group; update its fields with \"sanduk group add -g %s KEY\"", name, name)
 			}
 
 			if expires != "" && expires != expiryNone {

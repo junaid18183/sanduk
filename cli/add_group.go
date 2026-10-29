@@ -69,9 +69,9 @@ func newAddGroupCmd(a *app) *cobra.Command {
 			"Values come from --from-json (a file, or - for stdin), or repeated --field KEY,\n" +
 			"which prompts for KEY's value with echo off. Values are never taken from argv.\n" +
 			"To create a group from a .env file, use import --group.\n\n" +
-			"An existing entry is never replaced silently: use \"sanduk group set\" to merge\n" +
+			"An existing entry is never replaced silently: use \"sanduk group add\" to add\n" +
 			"fields, or pass --replace to overwrite the whole entry.\n\n" +
-			"With neither --field nor --from-json the group is created empty, and group set\n" +
+			"With neither --field nor --from-json the group is created empty, and group add\n" +
 			"fills it in later.\n\n" +
 			"Run at a repository root, or in a folder with no .git above it, this also makes\n" +
 			"the group that folder's:\n" +
@@ -117,7 +117,7 @@ func newAddGroupCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := a.refuseOverwrite(v, name, replace, "merge with \"sanduk group set -g "+name+" KEY\", or "); err != nil {
+			if err := a.refuseOverwrite(v, name, replace, "add fields with \"sanduk group add -g "+name+" KEY\", or "); err != nil {
 				return err
 			}
 

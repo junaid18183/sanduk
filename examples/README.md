@@ -65,7 +65,7 @@ sanduk doctor demo --template .env.example
 # 7. Fix the drift for one key, then check again. --from-env reads each named
 #    key from the environment variable of the same name.
 export LEGACY_TOKEN=demo-legacy-token-not-secret
-sanduk group set -g demo LEGACY_TOKEN --from-env LEGACY_TOKEN
+sanduk group add -g demo LEGACY_TOKEN --from-env LEGACY_TOKEN --replace
 unset LEGACY_TOKEN
 sanduk doctor demo --template .env.example
 

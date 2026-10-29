@@ -189,7 +189,7 @@ func (r *resolver) resolveSelectors(sels []selector) (selection, error) {
 			// An empty group is valid, but it injects nothing, so a run that
 			// selected it by name would otherwise look like it worked.
 			if s.env == "" && len(env) == 0 && len(files) == 0 && r.warn != nil {
-				r.warn("group %q has no variables yet; add some with \"sanduk group set -g %s KEY\"\n", s.name, s.name)
+				r.warn("group %q has no variables yet; add some with \"sanduk group add -g %s KEY\"\n", s.name, s.name)
 			}
 			got = selection{env: env, files: files}
 			r.cache[s] = got

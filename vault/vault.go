@@ -156,6 +156,35 @@ func (v *Vault) UnsetGroupFields(name string, keys []string) error {
 	return v.put(name, e)
 }
 
+// RotateGroupField replaces the stored value of one field of an existing group.
+// It refuses a field the group does not store, so a typo cannot quietly add one,
+// and a link, whose value lives in its target.
+func (v *Vault) RotateGroupField(name, key, value string) error {
+	if err := ValidateEnvName(key); err != nil {
+		return err
+	}
+	if value == "" {
+		return fmt.Errorf("no value provided for %s", key)
+	}
+	e, err := v.Get(name)
+	if err != nil {
+		return err
+	}
+	if e.Type != TypeGroup {
+		return fmt.Errorf("%q is a %s, not a group", name, e.Type)
+	}
+	_, flat := e.Links[key]
+	_, field := e.FieldLinks[key]
+	if flat || field {
+		return fmt.Errorf("group %q: %s is a link; rotate the entry it points at", name, key)
+	}
+	if _, ok := e.Fields[key]; !ok {
+		return fmt.Errorf("group %q has no field %q; add it with \"sanduk group add -g %s %s\"", name, key, name, key)
+	}
+	e.Fields[key] = value
+	return v.put(name, e)
+}
+
 // LinkGroupField points one of a group's environment variables at a flat
 // secret. Nothing is copied: the value is read from the target at resolve time,
 // so rotating the target changes what the group injects without a second edit.
@@ -289,7 +318,7 @@ func (v *Vault) UnlinkGroupField(group string, envNames []string) error {
 		_, field := e.FieldLinks[k]
 		if !flat && !field {
 			if _, stored := e.Fields[k]; stored {
-				return fmt.Errorf("group %q: %s is a stored value, not a link; use \"sanduk group unset -g %s %s\"",
+				return fmt.Errorf("group %q: %s is a stored value, not a link; use \"sanduk group remove -g %s %s\"",
 					group, k, group, k)
 			}
 			return fmt.Errorf("group %q has no link %q", group, k)

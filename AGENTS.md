@@ -23,7 +23,7 @@ cli/                    cobra commands, registered in cli/root.go; thin, no doma
   add.go, add_group.go  add a flat secret / create a group
   init.go               init: write and approve a repository's .sanduk.toml
   add_file.go           store a credential file, injected as a path
-  group.go              group set/unset/show and -g resolution (the project default), the field-level edit path
+  group.go              group add/remove/rotate/show and -g resolution (the project default), the field-level edit path
   group_list.go         group list: every group and the directory it belongs to
   group_link.go         group link/unlink: a field that points at a flat secret or Group/FIELD instead of copying it
   get.go                get (redacted unless --reveal; --field for one field of a group)
@@ -181,7 +181,7 @@ Break these and you break the tool's security model:
    reads nothing: it works from `GroupLocations` and the `linked_by` hints.
 3. **Secret values are never accepted as command-line arguments** (argv is
    visible in process listings). Input comes from an echo-off prompt, `--from-env`,
-   or stdin (`add` takes no file flag: `sanduk add NAME < key.txt`). `group set` deliberately has no VALUE position for
+   or stdin (`add` takes no file flag: `sanduk add NAME < key.txt`). `group add` deliberately has no VALUE position for
    this reason, and `add-group --field KEY=VALUE` / inline `--from-json` are
    refused (`--field KEY` prompts; `--from-json` takes a file or `-`).
 4. **`get` is terminal-gated; `export` is not.** `get` refuses to write to a
@@ -268,8 +268,9 @@ Break these and you break the tool's security model:
     inside the project, or one readable by group/other, is refused, since
     `SANDUK_TRUST`/`SANDUK_CONFIG` can move it.
 15. **Destructive writes are never the default.** `add`, `add-group` and `import` (flat
-    or `--group`) refuse to overwrite any existing entry without `--replace`, and
-    `rotate` is the way to change a flat secret's value; `remove` requires `--yes`
+    or `--group`) refuse to overwrite any existing entry without `--replace`, `group add`
+    refuses an existing field the same way. `rotate` is the way to change a flat
+    secret's value; `remove` requires `--yes`
     when stdin is not a terminal. Failing closed matters more than convenience.
     Decide from the backend, never from metadata alone, which can drift:
     `refuseOverwrite` lists names (no decrypt), and `add` reads an existing entry
