@@ -72,6 +72,7 @@ func (a *app) resolveSelection(sels, only, except []string) (selection, error) {
 	}
 
 	r := newResolver(v, cfg)
+	r.warn = a.warnf
 	if len(sels) == 0 {
 		layers, err := a.defaultProjects()
 		if err != nil {
@@ -163,6 +164,9 @@ type resolver struct {
 	v     *vault.Vault
 	cfg   *vault.Config
 	cache map[selector]selection
+	// warn reports a selector that resolved to nothing. It is nil when the
+	// caller did not ask for notices.
+	warn func(format string, args ...any)
 }
 
 func newResolver(v *vault.Vault, cfg *vault.Config) *resolver {
@@ -181,6 +185,11 @@ func (r *resolver) resolveSelectors(sels []selector) (selection, error) {
 			env, files, err := resolveOne(r.v, r.cfg, s)
 			if err != nil {
 				return selection{}, err
+			}
+			// An empty group is valid, but it injects nothing, so a run that
+			// selected it by name would otherwise look like it worked.
+			if s.env == "" && len(env) == 0 && len(files) == 0 && r.warn != nil {
+				r.warn("group %q has no variables yet; add some with \"sanduk group set -g %s KEY\"\n", s.name, s.name)
 			}
 			got = selection{env: env, files: files}
 			r.cache[s] = got

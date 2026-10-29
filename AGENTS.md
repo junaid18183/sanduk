@@ -23,10 +23,10 @@ cli/                    cobra commands, registered in cli/root.go; thin, no doma
   add.go, add_group.go  add a flat secret / create a group
   init.go               init: write and approve a repository's .sanduk.toml
   add_file.go           store a credential file, injected as a path
-  group.go              group set/unset/show/get, the field-level edit path
+  group.go              group set/unset/show and -g resolution (the project default), the field-level edit path
   group_list.go         group list: every group and the directory it belongs to
-  group_link.go         group link/unlink: a field that points at a flat secret instead of copying it
-  get.go                get (redacted unless --reveal) and the field printer group get shares
+  group_link.go         group link/unlink: a field that points at a flat secret or Group/FIELD instead of copying it
+  get.go                get (redacted unless --reveal; --field for one field of a group)
   exec.go, export.go    run a command with secrets / print them for scripts
   selector.go           the selection pipeline exec and export share (selectors, --only, --except)
   project.go            resolves the approved .sanduk.toml chain into default entries
@@ -181,7 +181,7 @@ Break these and you break the tool's security model:
    reads nothing: it works from `GroupLocations` and the `linked_by` hints.
 3. **Secret values are never accepted as command-line arguments** (argv is
    visible in process listings). Input comes from an echo-off prompt, `--from-env`,
-   `--from-file`, or stdin. `group set` deliberately has no VALUE position for
+   or stdin (`add` takes no file flag: `sanduk add NAME < key.txt`). `group set` deliberately has no VALUE position for
    this reason, and `add-group --field KEY=VALUE` / inline `--from-json` are
    refused (`--field KEY` prompts; `--from-json` takes a file or `-`).
 4. **`get` is terminal-gated; `export` is not.** `get` refuses to write to a
@@ -267,9 +267,9 @@ Break these and you break the tool's security model:
     second read. The store is `trusted.toml` (non-secret, mode 0600); a store
     inside the project, or one readable by group/other, is refused, since
     `SANDUK_TRUST`/`SANDUK_CONFIG` can move it.
-15. **Destructive writes are never the default.** `add-group` and `import` (flat
-    or `--group`) refuse to overwrite existing entries without `--replace`; `add` refuses to
-    turn a group into a flat secret without `--replace`; `remove` requires `--yes`
+15. **Destructive writes are never the default.** `add`, `add-group` and `import` (flat
+    or `--group`) refuse to overwrite any existing entry without `--replace`, and
+    `rotate` is the way to change a flat secret's value; `remove` requires `--yes`
     when stdin is not a terminal. Failing closed matters more than convenience.
     Decide from the backend, never from metadata alone, which can drift:
     `refuseOverwrite` lists names (no decrypt), and `add` reads an existing entry
@@ -286,15 +286,17 @@ Break these and you break the tool's security model:
     `vault.WriteFileAtomic`, and the age backend takes a cross-process lock
     (`filelock_*.go`) around read-modify-write.
 17. **A group link stores a name, never a value.** `group link` records
-    `env name -> flat secret` in the group's `Entry.Links`; the value is read at
+    `env name -> flat secret` in the group's `Entry.Links`, or
+    `env name -> Group/FIELD` in `Entry.FieldLinks`; the value is read at
     resolve time, so the target stays the single source of truth and a rotation
-    needs no re-sync. Links live in the backend entry, not in config.toml, so a
-    group stays self-contained: metadata can drift, and losing it must never
-    change which variables an entry injects. A link may only address a
-    `TypeSecret`, which makes a cycle impossible by construction rather than by
-    a depth limit; `validate()` enforces that a secret carries no links, that a
-    name is never both a stored field and a link, and that every link name
-    passes `ValidateEnvName`. A dangling link fails closed at resolve time
+    needs no re-sync. A field link's source must be a stored value of another
+    group, never a link, which keeps resolution one hop deep, and so a cycle is
+    impossible by construction rather than by a depth limit. Links live in the
+    backend entry, not in config.toml, so a group stays self-contained: metadata
+    can drift, and losing it must never change which variables an entry
+    injects. `validate()` enforces that a secret carries no links, that a name
+    is never both a stored field and a link, and that every link name passes
+    `ValidateEnvName`. A dangling link fails closed at resolve time
     (never a silently absent variable), and `doctor --links` reports it. Reads
     are deduplicated per target, which on `keychain-biometric` is one prompt per
     distinct secret; that backend also shares one `LAContext` so a single
@@ -351,7 +353,7 @@ Break these and you break the tool's security model:
     listing is the chain alone: the globals are a different question, and
     burying the keys of the directory you are in under them is what the
     scope exists to prevent. Ownership of a directory is recorded in **your** config
-    (`GroupMeta.Location`, written by `add-group` at a repository root and by
+    (`GroupMeta.Location`, written by `add-group` at a repository root (or in a folder with no `.git`) and by
     `allow`), never taken from the repository, so no cloned repository can
     claim a group by shipping a file — which is why a location needs no
     approval and `.sanduk.toml` still does. When both claim the working

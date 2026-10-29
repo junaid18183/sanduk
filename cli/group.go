@@ -14,45 +14,94 @@ import (
 func newGroupCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "group",
-		Short: "Inspect and edit the fields of a grouped entry",
+		Short: "Edit the fields of a group",
 		Long: "A group stores several named fields as one vault entry, where each field name\n" +
-			"is an environment variable name. Use add-group to create one, and these\n" +
-			"subcommands to edit it a field at a time.",
+			"is an environment variable name. Create one with add-group, then edit it a\n" +
+			"field at a time with these subcommands.\n\n" +
+			"Each takes -g GROUP. Without it, the group is the entry of the approved\n" +
+			".sanduk.toml in this directory, the same default exec and export use.",
 	}
 	cmd.AddCommand(newGroupListCmd(a), newGroupSetCmd(a), newGroupUnsetCmd(a), newGroupShowCmd(a),
-		newGroupGetCmd(a), newGroupLinkCmd(a), newGroupUnlinkCmd(a))
+		newGroupLinkCmd(a), newGroupUnlinkCmd(a))
 	return cmd
+}
+
+// groupFlag adds -g/--group to a group subcommand. The group is a flag rather
+// than a positional because the field names these commands also take would
+// make a single argument ambiguous: "get KEY" or "get GROUP"?
+func groupFlag(a *app, cmd *cobra.Command, group *string) {
+	cmd.Flags().StringVarP(group, "group", "g", "",
+		"group to edit (default: the entry of the approved .sanduk.toml here)")
+	_ = cmd.RegisterFlagCompletionFunc("group", func(c *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return a.completeEntryNames(c, nil, toComplete)
+	})
+}
+
+// resolveGroup returns the group a command edits: the -g flag if given, else the
+// entry of the nearest .sanduk.toml above this directory. That file must be
+// approved, the same as for exec and export, because it decides what is edited.
+func (a *app) resolveGroup(flag string) (string, error) {
+	if flag != "" {
+		return flag, nil
+	}
+	chain, err := vault.LoadProjectChain(".")
+	if err != nil {
+		return "", err
+	}
+	if len(chain) == 0 {
+		return "", fmt.Errorf("no group given: pass -g GROUP, or run \"sanduk init\" in a repository")
+	}
+	nearest := chain[len(chain)-1]
+	if err := a.requireTrustedProject(nearest); err != nil {
+		return "", err
+	}
+	return nearest.Entry, nil
+}
+
+// requireGroup fails unless name is an existing group. Only add-group creates a
+// group, so a mistyped -g cannot quietly start a new one.
+func requireGroup(v *vault.Vault, name string) error {
+	exists, err := v.Exists(name)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("no group %q; create it with \"sanduk add-group %s\"", name, name)
+	}
+	return nil
 }
 
 func newGroupSetCmd(a *app) *cobra.Command {
 	var (
-		fromEnv    bool
+		group      string
+		fromEnv    string
 		fromDotenv string
 		descFlag   string
 		expires    string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "set <group> [KEY...]",
-		Short: "Add or replace individual fields of a group",
-		Long: "Merge fields into a group. Only the named fields change; every other\n" +
-			"field keeps its value, and a group that does not exist yet is created with\n" +
-			"these fields.\n\n" +
+		Use:   "set [-g GROUP] [KEY...]",
+		Short: "Add or replace individual fields of an existing group",
+		Long: "Merge fields into a group. Only the named fields change; every other field\n" +
+			"keeps its value. The group must already exist: create it with add-group.\n\n" +
 			"Values are never taken from the command line, where they would be visible in\n" +
 			"process listings. They come from an echo-disabled prompt, from stdin when a\n" +
-			"single KEY is named and stdin is a pipe, from environment variables, or from\n" +
-			"a .env file:\n\n" +
-			"  sanduk group set warden DB_PASSWORD\n" +
-			"  echo \"$new\" | sanduk group set warden DB_PASSWORD\n" +
-			"  sanduk group set warden --from-env DB_PASSWORD STRIPE_KEY\n" +
-			"  sanduk group set warden --from-dotenv patch.env\n\n" +
+			"single KEY is named and stdin is a pipe, from one environment variable, or\n" +
+			"from a .env file:\n\n" +
+			"  sanduk group set -g warden DB_PASSWORD\n" +
+			"  echo \"$new\" | sanduk group set -g warden DB_PASSWORD\n" +
+			"  sanduk group set -g warden DB_PASSWORD --from-env NEW_DB_PASSWORD\n" +
+			"  sanduk group set -g warden --from-dotenv patch.env\n\n" +
 			"When a field already exists its current value is shown redacted, and the new\n" +
 			"value is asked for twice, so a typo cannot be stored.",
-		Args: cobra.MinimumNArgs(1),
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			keys := args[1:]
-
+			name, err := a.resolveGroup(group)
+			if err != nil {
+				return err
+			}
+			keys := args
 			for _, k := range keys {
 				if err := vault.ValidateEnvName(k); err != nil {
 					return err
@@ -61,6 +110,9 @@ func newGroupSetCmd(a *app) *cobra.Command {
 
 			v, err := a.openVault()
 			if err != nil {
+				return err
+			}
+			if err := requireGroup(v, name); err != nil {
 				return err
 			}
 
@@ -76,17 +128,15 @@ func newGroupSetCmd(a *app) *cobra.Command {
 				}
 				m = parsed
 
-			case fromEnv:
-				if len(keys) == 0 {
-					return fmt.Errorf("--from-env needs at least one KEY")
+			case fromEnv != "":
+				if len(keys) != 1 {
+					return fmt.Errorf("--from-env fills exactly one KEY; name it, and nothing else")
 				}
-				for _, k := range keys {
-					val, ok := os.LookupEnv(k)
-					if !ok || val == "" {
-						return fmt.Errorf("environment variable %s is not set", k)
-					}
-					m[k] = val
+				val, ok := os.LookupEnv(fromEnv)
+				if !ok || val == "" {
+					return fmt.Errorf("environment variable %s is not set or empty", fromEnv)
 				}
+				m[keys[0]] = val
 
 			default:
 				if len(keys) == 0 {
@@ -131,13 +181,13 @@ func newGroupSetCmd(a *app) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&fromEnv, "from-env", false,
-		"read each value from the environment variable of the same name")
+	cmd.Flags().StringVar(&fromEnv, "from-env", "",
+		"read the value of the one KEY from this environment variable")
 	cmd.Flags().StringVar(&fromDotenv, "from-dotenv", "", "merge the fields of a .env file")
 	cmd.Flags().StringVar(&descFlag, "description", "", "set the group's description")
 	cmd.Flags().StringVar(&expires, "expires", "", "rotation deadline as YYYY-MM-DD, or \"none\" to clear it")
 	cmd.MarkFlagsMutuallyExclusive("from-env", "from-dotenv")
-	cmd.ValidArgsFunction = a.completeEntryNames
+	groupFlag(a, cmd, &group)
 	return cmd
 }
 
@@ -187,15 +237,20 @@ func readGroupFieldValue(key string, allowStdin bool) (string, error) {
 }
 
 func newGroupUnsetCmd(a *app) *cobra.Command {
+	var group string
+
 	cmd := &cobra.Command{
-		Use:   "unset <group> KEY [KEY...]",
+		Use:   "unset [-g GROUP] KEY [KEY...]",
 		Short: "Remove fields from a group",
-		Args:  cobra.MinimumNArgs(2),
+		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			// De-duplicate so `unset g A A` cannot fail on the second A, which
+			name, err := a.resolveGroup(group)
+			if err != nil {
+				return err
+			}
+			// De-duplicate so `unset A A` cannot fail on the second A, which
 			// the first removal already deleted.
-			keys := dedupeStrings(args[1:])
+			keys := dedupeStrings(args)
 
 			v, err := a.openVault()
 			if err != nil {
@@ -210,24 +265,31 @@ func newGroupUnsetCmd(a *app) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.ValidArgsFunction = a.completeEntryNames
+	groupFlag(a, cmd, &group)
 	return cmd
 }
 
 func newGroupShowCmd(a *app) *cobra.Command {
-	var long bool
+	var (
+		group string
+		long  bool
+	)
 
 	cmd := &cobra.Command{
-		Use:   "show <group>",
+		Use:   "show [-g GROUP]",
 		Short: "List a group's field names (never its values)",
 		Long: "Print one field name per line, so the output composes with grep, xargs and\n" +
 			"--only. Linked fields are listed like any other: a consumer of the list\n" +
 			"cares which variables the group contributes, not where each value is kept.\n" +
-			"Values are never printed; use \"sanduk group get\" for one value.\n\n" +
+			"Values are never printed; use \"sanduk get -g GROUP --field KEY\" for one.\n\n" +
 			"--long adds a table showing which fields are links and what they point at.\n" +
 			"It is a separate flag so the default output stays safe to pipe.",
-		Args: cobra.ExactArgs(1),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			name, err := a.resolveGroup(group)
+			if err != nil {
+				return err
+			}
 			v, err := a.openVault()
 			if err != nil {
 				return err
@@ -240,12 +302,12 @@ func newGroupShowCmd(a *app) *cobra.Command {
 			// both its field names and its links, and on a backend that
 			// prompts per read — a dedicated keychain, or keychain-biometric
 			// — a second read is a second prompt for the same entry.
-			vars, err := v.Variables(args[0], cfg)
+			vars, err := v.Variables(name, cfg)
 			if err != nil {
 				return err
 			}
 			if vars.Type != vault.TypeGroup {
-				return fmt.Errorf("%q is a %s, not a group", args[0], vars.Type)
+				return fmt.Errorf("%q is a %s, not a group", name, vars.Type)
 			}
 			names, links := vars.Names, vars.Links
 
@@ -264,7 +326,7 @@ func newGroupShowCmd(a *app) *cobra.Command {
 				}
 			}
 
-			a.warnf("%d field(s) in group %q", len(names), args[0])
+			a.warnf("%d field(s) in group %q", len(names), name)
 			if len(links) > 0 {
 				a.warnf(", %d linked", len(links))
 			}
@@ -273,47 +335,6 @@ func newGroupShowCmd(a *app) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&long, "long", false, "show which fields are links and their targets")
-	cmd.ValidArgsFunction = a.completeEntryNames
-	return cmd
-}
-
-func newGroupGetCmd(a *app) *cobra.Command {
-	var (
-		reveal bool
-		force  bool
-	)
-
-	cmd := &cobra.Command{
-		Use:   "get <group> KEY",
-		Short: "Print one field of a group (redacted unless --reveal)",
-		Long: "Print a single field's value, so reviewing one secret does not dump the whole\n" +
-			"group. Like get, it refuses to print to a non-terminal unless --force is\n" +
-			"given, and it prints a redacted value unless --reveal is passed.",
-		Args: cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			out := cmd.OutOrStdout()
-			if err := requireTerminal(out, force); err != nil {
-				return err
-			}
-
-			v, err := a.openVault()
-			if err != nil {
-				return err
-			}
-			val, linkedTo, err := v.GroupFieldValue(args[0], args[1])
-			if err != nil {
-				return err
-			}
-			if linkedTo != "" {
-				a.warnf("%s is linked to secret %q\n", args[1], linkedTo)
-			}
-			_, err = fmt.Fprintln(out, revealOrRedact(val, reveal))
-			return err
-		},
-	}
-
-	cmd.Flags().BoolVar(&force, "force", false, "allow printing to a non-terminal")
-	cmd.Flags().BoolVar(&reveal, "reveal", false, "print the full value instead of a redacted one")
-	cmd.ValidArgsFunction = a.completeEntryNames
+	groupFlag(a, cmd, &group)
 	return cmd
 }

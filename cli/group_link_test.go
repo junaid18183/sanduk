@@ -28,7 +28,7 @@ func seedLinkable(t *testing.T) {
 func TestGroupLinkUsesTheSecretsConfiguredEnvName(t *testing.T) {
 	seedLinkable(t)
 
-	if _, err := runCmd(t, "", "group", "link", "maktub", "elevenlabs"); err != nil {
+	if _, err := runCmd(t, "", "group", "link", "-g", "maktub", "elevenlabs"); err != nil {
 		t.Fatalf("link: %v", err)
 	}
 
@@ -44,7 +44,7 @@ func TestGroupLinkUsesTheSecretsConfiguredEnvName(t *testing.T) {
 func TestGroupLinkBindsAnExplicitName(t *testing.T) {
 	seedLinkable(t)
 
-	if _, err := runCmd(t, "", "group", "link", "maktub", "XI_KEY=elevenlabs"); err != nil {
+	if _, err := runCmd(t, "", "group", "link", "-g", "maktub", "XI_KEY=elevenlabs"); err != nil {
 		t.Fatalf("link: %v", err)
 	}
 
@@ -63,7 +63,7 @@ func TestGroupLinkBindsAnExplicitName(t *testing.T) {
 // The single-source-of-truth guarantee, end to end through the CLI.
 func TestRotatingTheSecretUpdatesTheGroup(t *testing.T) {
 	seedLinkable(t)
-	if _, err := runCmd(t, "", "group", "link", "maktub", "elevenlabs"); err != nil {
+	if _, err := runCmd(t, "", "group", "link", "-g", "maktub", "elevenlabs"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -82,13 +82,13 @@ func TestRotatingTheSecretUpdatesTheGroup(t *testing.T) {
 
 func TestGroupShowListsLinksPlainAndLong(t *testing.T) {
 	seedLinkable(t)
-	if _, err := runCmd(t, "", "group", "link", "maktub", "elevenlabs"); err != nil {
+	if _, err := runCmd(t, "", "group", "link", "-g", "maktub", "elevenlabs"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Default output stays one bare name per line, so it keeps piping into
 	// --only and xargs.
-	out, err := runCmd(t, "", "group", "show", "maktub")
+	out, err := runCmd(t, "", "group", "show", "-g", "maktub")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestGroupShowListsLinksPlainAndLong(t *testing.T) {
 		t.Fatalf("show = %q, want %q", out, want)
 	}
 
-	out, err = runCmd(t, "", "group", "show", "maktub", "--long")
+	out, err = runCmd(t, "", "group", "show", "-g", "maktub", "--long")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,17 +108,17 @@ func TestGroupShowListsLinksPlainAndLong(t *testing.T) {
 
 func TestGroupUnlinkKeepsTheSecret(t *testing.T) {
 	seedLinkable(t)
-	if _, err := runCmd(t, "", "group", "link", "maktub", "elevenlabs"); err != nil {
+	if _, err := runCmd(t, "", "group", "link", "-g", "maktub", "elevenlabs"); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := runCmd(t, "", "group", "unlink", "maktub", "ELEVENLABS_API_KEY"); err != nil {
+	if _, err := runCmd(t, "", "group", "unlink", "-g", "maktub", "ELEVENLABS_API_KEY"); err != nil {
 		t.Fatalf("unlink: %v", err)
 	}
 	if _, err := runCmd(t, "", "export", "elevenlabs", "--format", "dotenv"); err != nil {
 		t.Fatalf("unlink removed the secret: %v", err)
 	}
-	out, err := runCmd(t, "", "group", "show", "maktub")
+	out, err := runCmd(t, "", "group", "show", "-g", "maktub")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestGroupUnlinkKeepsTheSecret(t *testing.T) {
 
 func TestExecRefusesADanglingLink(t *testing.T) {
 	seedLinkable(t)
-	if _, err := runCmd(t, "", "group", "link", "maktub", "elevenlabs"); err != nil {
+	if _, err := runCmd(t, "", "group", "link", "-g", "maktub", "elevenlabs"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runCmd(t, "", "remove", "elevenlabs", "--yes"); err != nil {
@@ -147,7 +147,7 @@ func TestExecRefusesADanglingLink(t *testing.T) {
 
 func TestDoctorLinksReportsDrift(t *testing.T) {
 	seedLinkable(t)
-	if _, err := runCmd(t, "", "group", "link", "maktub", "elevenlabs"); err != nil {
+	if _, err := runCmd(t, "", "group", "link", "-g", "maktub", "elevenlabs"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -175,7 +175,7 @@ func TestDoctorLinksReportsDrift(t *testing.T) {
 // A linked field satisfies a template key: doctor must not call it missing.
 func TestDoctorTemplateCountsLinkedFields(t *testing.T) {
 	seedLinkable(t)
-	if _, err := runCmd(t, "", "group", "link", "maktub", "elevenlabs"); err != nil {
+	if _, err := runCmd(t, "", "group", "link", "-g", "maktub", "elevenlabs"); err != nil {
 		t.Fatal(err)
 	}
 	tmpl := filepath.Join(t.TempDir(), ".env.example")
@@ -198,7 +198,7 @@ func TestGroupLinkRefusesAGroupTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := runCmd(t, "", "group", "link", "maktub", "warden")
+	_, err := runCmd(t, "", "group", "link", "-g", "maktub", "warden")
 	if err == nil || !strings.Contains(err.Error(), "flat secret") {
 		t.Fatalf("err = %v, want a flat-secret refusal", err)
 	}
@@ -206,15 +206,28 @@ func TestGroupLinkRefusesAGroupTarget(t *testing.T) {
 
 func TestGroupLinkRefusesAStoredField(t *testing.T) {
 	seedLinkable(t)
-	_, err := runCmd(t, "", "group", "link", "maktub", "MAKTUB_DB_URL=elevenlabs")
+	_, err := runCmd(t, "", "group", "link", "-g", "maktub", "MAKTUB_DB_URL=elevenlabs")
 	if err == nil || !strings.Contains(err.Error(), "already stores") {
 		t.Fatalf("err = %v, want a refusal", err)
 	}
 }
 
+// Only add-group creates a group: a link into a missing one is refused, so a
+// mistyped -g cannot start a new group.
+func TestLinkRefusesAMissingGroup(t *testing.T) {
+	seedLinkable(t)
+	_, err := runCmd(t, "", "group", "link", "-g", "fresh", "elevenlabs")
+	if err == nil || !strings.Contains(err.Error(), "add-group") {
+		t.Fatalf("link into a missing group: err = %v", err)
+	}
+}
+
 func TestLinkedGroupIsRecordedAsAGroup(t *testing.T) {
 	seedLinkable(t)
-	if _, err := runCmd(t, "", "group", "link", "fresh", "elevenlabs"); err != nil {
+	if _, err := runCmd(t, `{"OTHER":"x"}`, "add-group", "fresh", "--from-json", "-"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCmd(t, "", "group", "link", "-g", "fresh", "elevenlabs"); err != nil {
 		t.Fatalf("link: %v", err)
 	}
 	out, err := runCmd(t, "", "list")

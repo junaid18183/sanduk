@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/junaid18183/sanduk/vault"
@@ -12,7 +11,6 @@ func newGetCmd(a *app) *cobra.Command {
 	var (
 		force  bool
 		field  string
-		all    bool
 		reveal bool
 	)
 
@@ -23,9 +21,8 @@ func newGetCmd(a *app) *cobra.Command {
 			"redacted to their last four characters unless --reveal is given, and sanduk\n" +
 			"refuses to print to a non-terminal unless --force is given. Scripts should\n" +
 			"use export, which is the interface for machines.\n\n" +
-			"For a group, name the field you want with --field, or pass --all to print\n" +
-			"every field as JSON. Reading a single field is the least-privilege way to\n" +
-			"review one secret.",
+			"For a group, name the field you want with --field. Reading a single field is\n" +
+			"the least-privilege way to review one secret; export prints every field.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
@@ -44,8 +41,8 @@ func newGetCmd(a *app) *cobra.Command {
 
 			switch e.Type {
 			case vault.TypeSecret:
-				if field != "" || all {
-					return fmt.Errorf("%q is a flat secret; --field and --all apply to groups", args[0])
+				if field != "" {
+					return fmt.Errorf("%q is a flat secret; --field applies to groups", args[0])
 				}
 				fmt.Fprintln(out, revealOrRedact(e.Value, reveal))
 
@@ -63,25 +60,12 @@ func newGetCmd(a *app) *cobra.Command {
 					_, err = fmt.Fprintln(out, revealOrRedact(val, reveal))
 					return err
 				}
-				if !all {
-					return fmt.Errorf("%q is a group with %d field(s); pass --field KEY to print one, or --all for every field",
-						args[0], len(e.Fields)+len(e.Links))
-				}
-				values, err := v.GroupValues(args[0])
-				if err != nil {
-					return err
-				}
-				fields := make(map[string]string, len(values))
-				for k, val := range values {
-					fields[k] = revealOrRedact(val, reveal)
-				}
-				enc := json.NewEncoder(out)
-				enc.SetIndent("", "  ")
-				return enc.Encode(fields)
+				return fmt.Errorf("%q is a group with %d field(s); pass --field KEY to print one, or use \"sanduk export %s\" for all of them",
+					args[0], e.FieldCount(), args[0])
 
 			case vault.TypeFile:
-				if field != "" || all {
-					return fmt.Errorf("%q is a file secret; --field and --all apply to groups", args[0])
+				if field != "" {
+					return fmt.Errorf("%q is a file secret; --field applies to groups", args[0])
 				}
 				// File secrets are opaque bytes, often binary. Printing them
 				// to a terminal is never what anyone wants, and get is the
@@ -102,9 +86,7 @@ func newGetCmd(a *app) *cobra.Command {
 
 	cmd.Flags().BoolVar(&force, "force", false, "allow printing to a non-terminal")
 	cmd.Flags().StringVar(&field, "field", "", "print only this field of a group")
-	cmd.Flags().BoolVar(&all, "all", false, "print every field of a group as JSON")
 	cmd.Flags().BoolVar(&reveal, "reveal", false, "print full values instead of redacted ones")
-	cmd.MarkFlagsMutuallyExclusive("field", "all")
 	cmd.ValidArgsFunction = a.completeEntryNames
 	return cmd
 }

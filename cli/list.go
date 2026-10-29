@@ -20,7 +20,6 @@ func newListCmd(a *app) *cobra.Command {
 	var (
 		asJSON    bool
 		namesOnly bool
-		all       bool
 		scope     string
 		noKeys    bool
 	)
@@ -41,13 +40,10 @@ func newListCmd(a *app) *cobra.Command {
 			"those names opens that one entry (and may prompt on a presence-gated\n" +
 			"backend); --no-keys lists the entry without them. No value is ever read\n" +
 			"for the table itself, or ever printed.\n\n" +
-			"--all, or --scope project|member|global, shows what the default hides.\n" +
+			"--scope project|member|global|all shows what the default hides.\n" +
 			"The count of hidden entries is always reported on stderr.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if all {
-				scope = scopeAll
-			}
 			if scope != "" && scope != scopeAll && !vault.ValidScope(scope) {
 				return fmt.Errorf("unknown scope %q: use project, member, global or all", scope)
 			}
@@ -128,12 +124,10 @@ func newListCmd(a *app) *cobra.Command {
 
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the listing as a JSON object")
 	cmd.Flags().BoolVar(&namesOnly, "names", false, "print entry names only, one per line")
-	cmd.Flags().BoolVar(&all, "all", false, "list every entry, whatever its scope")
 	cmd.Flags().StringVar(&scope, "scope", "", "list one scope only: project, member, global or all")
 	cmd.Flags().BoolVar(&noKeys, "no-keys", false,
 		"do not open the project entry to list the variables it provides")
 	cmd.MarkFlagsMutuallyExclusive("json", "names")
-	cmd.MarkFlagsMutuallyExclusive("all", "scope")
 	return cmd
 }
 
@@ -146,7 +140,7 @@ func newListCmd(a *app) *cobra.Command {
 // any project there is no chain to show, so the globals are the answer.
 //
 // Nothing is lost silently either way — reportHidden always says how many
-// entries the filter left out, and --all or --scope global shows them.
+// entries the filter left out, and --scope all or --scope global shows them.
 func visibleInScope(e vault.Scoped, scope string, inProject bool) bool {
 	switch scope {
 	case scopeAll:
@@ -174,7 +168,7 @@ func (a *app) reportHidden(hidden map[string]int) {
 			parts = append(parts, fmt.Sprintf("%d %s", n, s))
 		}
 	}
-	a.warnf("%d entry/entries hidden (%s) — see \"sanduk list --all\"\n",
+	a.warnf("%d entry/entries hidden (%s) — see \"sanduk list --scope all\"\n",
 		total, joinComma(parts))
 }
 

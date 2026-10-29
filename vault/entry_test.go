@@ -44,7 +44,6 @@ func TestEntryValidation(t *testing.T) {
 	}{
 		{"unknown type", Entry{Type: "nope"}},
 		{"empty secret", Entry{Type: TypeSecret}},
-		{"empty group", Entry{Type: TypeGroup, Fields: map[string]string{}}},
 	}
 	for _, tc := range cases {
 		if _, err := tc.e.Marshal(); err == nil {

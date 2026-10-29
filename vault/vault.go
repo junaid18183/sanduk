@@ -142,18 +142,16 @@ func (v *Vault) UnsetGroupFields(name string, keys []string) error {
 		return fmt.Errorf("%q is a %s, not a group", name, e.Type)
 	}
 	for _, k := range keys {
-		if _, ok := e.Links[k]; ok {
-			return fmt.Errorf("group %q: %s is a link, not a stored value; use \"sanduk group unlink %s %s\"",
+		_, flat := e.Links[k]
+		_, field := e.FieldLinks[k]
+		if flat || field {
+			return fmt.Errorf("group %q: %s is a link, not a stored value; use \"sanduk group unlink -g %s %s\"",
 				name, k, name, k)
 		}
 		if _, ok := e.Fields[k]; !ok {
 			return fmt.Errorf("group %q has no field %q", name, k)
 		}
 		delete(e.Fields, k)
-	}
-	if len(e.Fields)+len(e.Links) == 0 {
-		return fmt.Errorf("refusing to remove the last field of %q; use \"sanduk remove %s\" to delete the entry",
-			name, name)
 	}
 	return v.put(name, e)
 }
@@ -162,12 +160,17 @@ func (v *Vault) UnsetGroupFields(name string, keys []string) error {
 // secret. Nothing is copied: the value is read from the target at resolve time,
 // so rotating the target changes what the group injects without a second edit.
 //
-// A link may only address a flat secret. That makes a cycle impossible by
-// construction rather than by a depth counter, and keeps resolution to a single
-// extra read per distinct target.
+// A link names either a flat secret ("elevenlabs") or a stored field of another
+// group ("ElevenLabs/elevenlabs_siddik"). A field link may only address a value
+// the other group stores itself, never one of its links, so resolution stays one
+// hop deep and a cycle is impossible by construction rather than by a depth
+// counter.
 func (v *Vault) LinkGroupField(group, envName, target string) error {
 	if err := ValidateEnvName(envName); err != nil {
 		return err
+	}
+	if IsFieldRef(target) {
+		return v.linkFieldRef(group, envName, target)
 	}
 	if err := ValidateEntryName(target); err != nil {
 		return err
@@ -186,28 +189,87 @@ func (v *Vault) LinkGroupField(group, envName, target string) error {
 		return err
 	}
 	if te.Type != TypeSecret {
-		return fmt.Errorf("%q is a %s; a link must point at a flat secret", target, te.Type)
+		return fmt.Errorf("%q is a %s; a link must point at a flat secret or a Group/FIELD", target, te.Type)
 	}
 
-	e, err := v.Get(group)
-	switch {
-	case errors.Is(err, ErrNotFound):
-		e = &Entry{Version: entryVersion, Type: TypeGroup}
-	case err != nil:
+	e, err := v.groupForLink(group, envName)
+	if err != nil {
 		return err
-	case e.Type != TypeGroup:
-		return fmt.Errorf("%q is a %s, not a group", group, e.Type)
-	}
-
-	if _, ok := e.Fields[envName]; ok {
-		return fmt.Errorf("%q already stores %s as a value; unset it first, or link under another name",
-			group, envName)
 	}
 	if e.Links == nil {
 		e.Links = map[string]string{}
 	}
+	delete(e.FieldLinks, envName)
 	e.Links[envName] = target
 	return v.put(group, e)
+}
+
+// linkFieldRef points a group field at a stored field of another group.
+func (v *Vault) linkFieldRef(group, envName, ref string) error {
+	src, field, ok := SplitFieldRef(ref)
+	if !ok {
+		return fmt.Errorf("%q is not Group/FIELD", ref)
+	}
+	if err := ValidateEntryName(src); err != nil {
+		return err
+	}
+	if err := ValidateEnvName(field); err != nil {
+		return err
+	}
+	if src == group {
+		return fmt.Errorf("%q cannot link to its own field %s", group, field)
+	}
+
+	se, err := v.Get(src)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("%w: %s (link target)", ErrNotFound, src)
+		}
+		return err
+	}
+	if se.Type != TypeGroup {
+		return fmt.Errorf("%q is a %s; a Group/FIELD link must point at a group", src, se.Type)
+	}
+	if _, stored := se.Fields[field]; !stored {
+		if _, linked := se.Links[field]; linked {
+			return fmt.Errorf("%s.%s is a link, not a stored value; link to the flat secret it points at", src, field)
+		}
+		if _, linked := se.FieldLinks[field]; linked {
+			return fmt.Errorf("%s.%s is a link, not a stored value; link to the value it points at", src, field)
+		}
+		return fmt.Errorf("%q has no stored field %q", src, field)
+	}
+
+	e, err := v.groupForLink(group, envName)
+	if err != nil {
+		return err
+	}
+	if e.FieldLinks == nil {
+		e.FieldLinks = map[string]string{}
+	}
+	delete(e.Links, envName)
+	e.FieldLinks[envName] = ref
+	return v.put(group, e)
+}
+
+// groupForLink returns the group a link is being added to. Only add-group
+// creates a group, so a link to a missing one is refused rather than started,
+// and a variable the group already stores itself is refused too.
+func (v *Vault) groupForLink(group, envName string) (*Entry, error) {
+	e, err := v.Get(group)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, fmt.Errorf("%w: %s (create it with add-group)", ErrNotFound, group)
+	case err != nil:
+		return nil, err
+	case e.Type != TypeGroup:
+		return nil, fmt.Errorf("%q is a %s, not a group", group, e.Type)
+	}
+	if _, ok := e.Fields[envName]; ok {
+		return nil, fmt.Errorf("%q already stores %s as a value; unset it first, or link under another name",
+			group, envName)
+	}
+	return e, nil
 }
 
 // UnlinkGroupField removes a link, leaving the target secret untouched.
@@ -223,18 +285,17 @@ func (v *Vault) UnlinkGroupField(group string, envNames []string) error {
 		return fmt.Errorf("%q is a %s, not a group", group, e.Type)
 	}
 	for _, k := range envNames {
-		if _, ok := e.Links[k]; !ok {
+		_, flat := e.Links[k]
+		_, field := e.FieldLinks[k]
+		if !flat && !field {
 			if _, stored := e.Fields[k]; stored {
-				return fmt.Errorf("group %q: %s is a stored value, not a link; use \"sanduk group unset %s %s\"",
+				return fmt.Errorf("group %q: %s is a stored value, not a link; use \"sanduk group unset -g %s %s\"",
 					group, k, group, k)
 			}
 			return fmt.Errorf("group %q has no link %q", group, k)
 		}
 		delete(e.Links, k)
-	}
-	if len(e.Fields)+len(e.Links) == 0 {
-		return fmt.Errorf("refusing to remove the last field of %q; use \"sanduk remove %s\" to delete the entry",
-			group, group)
+		delete(e.FieldLinks, k)
 	}
 	return v.put(group, e)
 }
@@ -244,29 +305,75 @@ func (v *Vault) UnlinkGroupField(group string, envNames []string) error {
 // a presence-gated backend is one prompt. Names are walked in sorted order so a
 // dangling link reports the same field every time.
 func (v *Vault) resolveLinks(group string, e *Entry, out map[string]string) error {
-	if len(e.Links) == 0 {
+	if len(e.Links)+len(e.FieldLinks) == 0 {
 		return nil
 	}
-	envNames := make([]string, 0, len(e.Links))
+	envNames := make([]string, 0, len(e.Links)+len(e.FieldLinks))
 	for env := range e.Links {
+		envNames = append(envNames, env)
+	}
+	for env := range e.FieldLinks {
 		envNames = append(envNames, env)
 	}
 	sort.Strings(envNames)
 
-	cache := make(map[string]string, len(e.Links))
+	// A flat target and a field target are cached apart: a flat secret's name
+	// may contain "/", so one map could not tell the two apart.
+	flat := make(map[string]string, len(e.Links))
+	fields := make(map[string]string, len(e.FieldLinks))
 	for _, env := range envNames {
-		target := e.Links[env]
-		val, ok := cache[target]
-		if !ok {
+		if target, ok := e.Links[env]; ok {
+			val, cached := flat[target]
+			if !cached {
+				var err error
+				if val, err = v.linkValue(group, env, target); err != nil {
+					return err
+				}
+				flat[target] = val
+			}
+			out[env] = val
+			continue
+		}
+		ref := e.FieldLinks[env]
+		val, cached := fields[ref]
+		if !cached {
 			var err error
-			if val, err = v.linkValue(group, env, target); err != nil {
+			if val, err = v.fieldValue(group, env, ref); err != nil {
 				return err
 			}
-			cache[target] = val
+			fields[ref] = val
 		}
 		out[env] = val
 	}
 	return nil
+}
+
+// fieldValue reads the stored field a Group/FIELD link names, failing closed
+// like linkValue. The source must be a value the other group stores itself:
+// that is what keeps resolution one hop deep.
+func (v *Vault) fieldValue(group, env, ref string) (string, error) {
+	src, field, ok := SplitFieldRef(ref)
+	if !ok {
+		return "", fmt.Errorf("group %q: field %s has a malformed link %q", group, env, ref)
+	}
+	se, err := v.Get(src)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return "", fmt.Errorf("group %q: field %s links to %q, which is not in the vault",
+				group, env, ref)
+		}
+		return "", err
+	}
+	if se.Type != TypeGroup {
+		return "", fmt.Errorf("group %q: field %s links to %q, which is a %s, not a group",
+			group, env, ref, se.Type)
+	}
+	val, stored := se.Fields[field]
+	if !stored {
+		return "", fmt.Errorf("group %q: field %s links to %q, which is not a stored field of %q",
+			group, env, ref, src)
+	}
+	return val, nil
 }
 
 // linkValue reads one link target, failing closed with a message that names the
@@ -323,6 +430,10 @@ func (v *Vault) GroupFieldValue(name, key string) (val, linkedTo string, err err
 		val, err := v.linkValue(name, key, target)
 		return val, target, err
 	}
+	if ref, ok := e.FieldLinks[key]; ok {
+		val, err := v.fieldValue(name, key, ref)
+		return val, ref, err
+	}
 	if val, ok := e.Fields[key]; ok {
 		return val, "", nil
 	}
@@ -346,11 +457,14 @@ func (v *Vault) GroupFieldNames(name string) ([]string, error) {
 // groupFieldNames returns every variable name a group contributes, stored and
 // linked alike, sorted.
 func groupFieldNames(e *Entry) []string {
-	names := make([]string, 0, len(e.Fields)+len(e.Links))
+	names := make([]string, 0, e.FieldCount())
 	for k := range e.Fields {
 		names = append(names, k)
 	}
 	for k := range e.Links {
+		names = append(names, k)
+	}
+	for k := range e.FieldLinks {
 		names = append(names, k)
 	}
 	sort.Strings(names)
@@ -363,8 +477,9 @@ func groupFieldNames(e *Entry) []string {
 type Variables struct {
 	Type  string
 	Names []string
-	// Links maps a variable name to the flat secret it resolves through.
-	// Absent for a variable the entry stores itself.
+	// Links maps a variable name to what it resolves through: a flat secret's
+	// name, or "Group/FIELD" for a field of another group. Absent for a
+	// variable the entry stores itself.
 	Links map[string]string
 }
 
@@ -379,7 +494,16 @@ func (v *Vault) Variables(name string, c *Config) (*Variables, error) {
 	}
 	out := &Variables{Type: e.Type}
 	if e.Type == TypeGroup {
-		out.Names, out.Links = groupFieldNames(e), e.Links
+		out.Names = groupFieldNames(e)
+		if len(e.Links)+len(e.FieldLinks) > 0 {
+			out.Links = make(map[string]string, len(e.Links)+len(e.FieldLinks))
+			for k, t := range e.Links {
+				out.Links[k] = t
+			}
+			for k, ref := range e.FieldLinks {
+				out.Links[k] = ref
+			}
+		}
 		return out, nil
 	}
 	// A flat or file secret contributes the one variable it is mapped to.

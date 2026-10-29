@@ -33,7 +33,7 @@ func addWarden(t *testing.T) {
 	if err := writeFileString(src, "DB_URL=postgres://test\nAPI_KEY=sk-test-api\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCmd(t, "", "add-group", "warden", "--from-dotenv", src, "--description", "test group"); err != nil {
+	if _, err := runCmd(t, "", "add-group", "warden", "--from-json", dotenvAsJSON(t, src), "--description", "test group"); err != nil {
 		t.Fatalf("add-group: %v", err)
 	}
 }
@@ -124,10 +124,10 @@ func TestGroupSetUnsetShowGet(t *testing.T) {
 	addWarden(t)
 
 	// group set KEY reads a single value from piped stdin.
-	if _, err := runCmd(t, "sk-test-stripe", "group", "set", "warden", "STRIPE_KEY"); err != nil {
+	if _, err := runCmd(t, "sk-test-stripe", "group", "set", "-g", "warden", "STRIPE_KEY"); err != nil {
 		t.Fatalf("group set: %v", err)
 	}
-	out, err := runCmd(t, "", "group", "show", "warden")
+	out, err := runCmd(t, "", "group", "show", "-g", "warden")
 	if err != nil {
 		t.Fatalf("group show: %v", err)
 	}
@@ -135,31 +135,32 @@ func TestGroupSetUnsetShowGet(t *testing.T) {
 		t.Fatalf("group show = %q", out)
 	}
 
-	out, err = runCmd(t, "", "group", "get", "warden", "STRIPE_KEY", "--force")
+	out, err = runCmd(t, "", "get", "warden", "--field", "STRIPE_KEY", "--force")
 	if err != nil || out != redact("sk-test-stripe")+"\n" {
 		t.Fatalf("group get (redacted) = %q, %v", out, err)
 	}
-	out, err = runCmd(t, "", "group", "get", "warden", "STRIPE_KEY", "--force", "--reveal")
+	out, err = runCmd(t, "", "get", "warden", "--field", "STRIPE_KEY", "--force", "--reveal")
 	if err != nil || out != "sk-test-stripe\n" {
 		t.Fatalf("group get --reveal = %q, %v", out, err)
 	}
-	if _, err := runCmd(t, "", "group", "get", "warden", "NOPE", "--force"); err == nil {
+	if _, err := runCmd(t, "", "get", "warden", "--field", "NOPE", "--force"); err == nil {
 		t.Fatal("group get of an unknown field succeeded")
 	}
 
-	if _, err := runCmd(t, "", "group", "unset", "warden", "STRIPE_KEY"); err != nil {
+	if _, err := runCmd(t, "", "group", "unset", "-g", "warden", "STRIPE_KEY"); err != nil {
 		t.Fatalf("group unset: %v", err)
 	}
-	if _, err := runCmd(t, "", "group", "unset", "warden", "API_KEY", "DB_URL"); err == nil {
-		t.Fatal("group unset removed every field")
+	// A group may be emptied: it still exists, and group set fills it again.
+	if _, err := runCmd(t, "", "group", "unset", "-g", "warden", "API_KEY", "DB_URL"); err != nil {
+		t.Fatalf("group unset of every field: %v", err)
 	}
 
-	// --from-env reads each key from the variable of the same name.
+	// --from-env names the variable the one KEY takes its value from.
 	t.Setenv("REDIS_URL", "redis://test")
-	if _, err := runCmd(t, "", "group", "set", "warden", "REDIS_URL", "--from-env"); err != nil {
+	if _, err := runCmd(t, "", "group", "set", "-g", "warden", "REDIS_URL", "--from-env", "REDIS_URL"); err != nil {
 		t.Fatalf("group set --from-env: %v", err)
 	}
-	if _, err := runCmd(t, "", "group", "set", "warden", "LD_PRELOAD", "--from-env"); err == nil {
+	if _, err := runCmd(t, "", "group", "set", "-g", "warden", "LD_PRELOAD", "--from-env", "REDIS_URL"); err == nil {
 		t.Fatal("group set accepted LD_PRELOAD")
 	}
 }
@@ -171,25 +172,9 @@ func TestGetGroupFieldAndAll(t *testing.T) {
 	if err != nil || out != redact("sk-test-api")+"\n" {
 		t.Fatalf("get --field = %q, %v", out, err)
 	}
-	// --all is redacted like everything else get prints, unless --reveal.
-	for _, c := range []struct {
-		args []string
-		want string
-	}{
-		{[]string{"get", "warden", "--all", "--force"}, redact("postgres://test")},
-		{[]string{"get", "warden", "--all", "--force", "--reveal"}, "postgres://test"},
-	} {
-		out, err = runCmd(t, "", c.args...)
-		if err != nil {
-			t.Fatalf("%v: %v", c.args, err)
-		}
-		var m map[string]string
-		if err := json.Unmarshal([]byte(out), &m); err != nil || m["DB_URL"] != c.want {
-			t.Fatalf("%v = %q (%v), want DB_URL %q", c.args, out, err, c.want)
-		}
-	}
+	// A group has no whole-group read in get: export prints every field.
 	if _, err := runCmd(t, "", "get", "warden", "--force"); err == nil {
-		t.Fatal("get of a group without --field/--all succeeded")
+		t.Fatal("get of a group without --field succeeded")
 	}
 }
 

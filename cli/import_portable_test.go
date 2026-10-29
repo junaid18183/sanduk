@@ -73,7 +73,7 @@ func TestImportCSVIntoAGroup(t *testing.T) {
 	if _, err := runCmd(t, "", "import", path, "--group", "imported"); err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	out, err := runCmd(t, "", "group", "show", "imported")
+	out, err := runCmd(t, "", "group", "show", "-g", "imported")
 	if err != nil {
 		t.Fatal(err)
 	}

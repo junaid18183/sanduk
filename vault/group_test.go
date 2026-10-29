@@ -82,23 +82,39 @@ func TestUnsetGroupFields(t *testing.T) {
 	}
 }
 
-func TestUnsetGroupFieldsRefusesLastField(t *testing.T) {
+// A group may be emptied: it stays a valid entry, and fields can be added back.
+func TestUnsetGroupFieldsCanEmptyAGroup(t *testing.T) {
 	v := newFileVault(t)
 	if err := v.AddGroup("warden", map[string]string{"A": "1"}); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := v.UnsetGroupFields("warden", []string{"A"}); err == nil {
-		t.Fatal("expected removing the last field to be refused")
+	if err := v.UnsetGroupFields("warden", []string{"A"}); err != nil {
+		t.Fatalf("unset of the last field: %v", err)
 	}
-
-	// The entry must be untouched after the refusal.
 	e, err := v.Get("warden")
 	if err != nil {
 		t.Fatalf("entry should still exist: %v", err)
 	}
-	if e.Fields["A"] != "1" {
-		t.Fatalf("fields = %v, want them unchanged", e.Fields)
+	if e.Type != TypeGroup || e.FieldCount() != 0 {
+		t.Fatalf("entry = %+v, want an empty group", e)
+	}
+	if err := v.MergeGroup("warden", map[string]string{"B": "2"}); err != nil {
+		t.Fatalf("refill: %v", err)
+	}
+}
+
+// add-group with no fields creates an empty group.
+func TestAddEmptyGroup(t *testing.T) {
+	v := newFileVault(t)
+	if err := v.AddGroup("bare", nil); err != nil {
+		t.Fatalf("AddGroup with no fields: %v", err)
+	}
+	e, err := v.Get("bare")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Type != TypeGroup || e.FieldCount() != 0 {
+		t.Fatalf("entry = %+v, want an empty group", e)
 	}
 }
 

@@ -43,7 +43,7 @@ func addProjectGroup(t *testing.T, name string) string {
 	if err := writeFileString(src, "DB_URL=postgres://test\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCmd(t, "", "add-group", name, "--from-dotenv", src, "--description", "project group"); err != nil {
+	if _, err := runCmd(t, "", "add-group", name, "--from-json", dotenvAsJSON(t, src), "--description", "project group"); err != nil {
 		t.Fatalf("add-group: %v", err)
 	}
 	return dir
@@ -94,7 +94,7 @@ func TestAddGroupKeepsAnExistingProjectFile(t *testing.T) {
 	if err := writeFileString(src, "K=v\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCmd(t, "", "add-group", "second", "--from-dotenv", src); err != nil {
+	if _, err := runCmd(t, "", "add-group", "second", "--from-json", dotenvAsJSON(t, src)); err != nil {
 		t.Fatalf("add-group: %v", err)
 	}
 	b, err := os.ReadFile(path)
@@ -111,7 +111,9 @@ func TestAddGroupKeepsAnExistingProjectFile(t *testing.T) {
 	}
 }
 
-func TestAddGroupOutsideARepositoryStaysGlobal(t *testing.T) {
+// A folder with no .git above it is its own project, the same as init treats
+// it, so add-group binds the group to it and writes the project file there.
+func TestAddGroupOutsideARepositoryBindsTheFolder(t *testing.T) {
 	cfgPath := testEnv(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -119,18 +121,18 @@ func TestAddGroupOutsideARepositoryStaysGlobal(t *testing.T) {
 	if err := writeFileString(src, "K=v\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCmd(t, "", "add-group", "loose", "--from-dotenv", src); err != nil {
+	if _, err := runCmd(t, "", "add-group", "loose", "--from-json", dotenvAsJSON(t, src)); err != nil {
 		t.Fatalf("add-group: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, vault.ProjectFileName)); !os.IsNotExist(err) {
-		t.Fatal("add-group wrote a project file outside a repository")
+	if _, err := os.Stat(filepath.Join(dir, vault.ProjectFileName)); err != nil {
+		t.Fatalf("add-group wrote no project file in a folder without git: %v", err)
 	}
 	cfg, err := vault.LoadConfig(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Groups["loose"].Location; got != "" {
-		t.Fatalf("location = %q, want none", got)
+	if got := cfg.Groups["loose"].Location; got == "" {
+		t.Fatal("add-group did not record the folder as the group's location")
 	}
 }
 
@@ -141,7 +143,7 @@ func TestNoProjectKeepsAddGroupGlobal(t *testing.T) {
 	if err := writeFileString(src, "K=v\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCmd(t, "", "add-group", "loose", "--from-dotenv", src, "--no-project"); err != nil {
+	if _, err := runCmd(t, "", "add-group", "loose", "--from-json", dotenvAsJSON(t, src), "--global"); err != nil {
 		t.Fatalf("add-group --no-project: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, vault.ProjectFileName)); !os.IsNotExist(err) {
@@ -169,7 +171,7 @@ func TestListScopes(t *testing.T) {
 		t.Fatalf("add standalone: %v", err)
 	}
 	// Linking makes openai part of warden rather than a top-level entry.
-	if _, err := runCmd(t, "", "group", "link", "warden", "openai"); err != nil {
+	if _, err := runCmd(t, "", "group", "link", "-g", "warden", "openai"); err != nil {
 		t.Fatalf("group link: %v", err)
 	}
 
@@ -220,9 +222,9 @@ func TestListScopes(t *testing.T) {
 	}
 
 	// --all is the escape hatch, and says which scope each entry is in.
-	out, err = runCmd(t, "", "list", "--all")
+	out, err = runCmd(t, "", "list", "--scope", "all")
 	if err != nil {
-		t.Fatalf("list --all: %v", err)
+		t.Fatalf("list --scope all: %v", err)
 	}
 	for _, want := range []string{"SCOPE", "warden", "project", "openai", "member of warden", "standalone", "global"} {
 		if !strings.Contains(out, want) {
@@ -289,7 +291,7 @@ func TestGroupList(t *testing.T) {
 	if err := writeFileString(src, "K=v\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCmd(t, "", "add-group", "loose", "--from-dotenv", src); err != nil {
+	if _, err := runCmd(t, "", "add-group", "loose", "--from-json", dotenvAsJSON(t, src)); err != nil {
 		t.Fatalf("add-group: %v", err)
 	}
 
@@ -388,7 +390,7 @@ func TestAllowRecordsTheLocation(t *testing.T) {
 	if err := writeFileString(src, "K=v\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCmd(t, "", "add-group", "shared", "--from-dotenv", src, "--no-project"); err != nil {
+	if _, err := runCmd(t, "", "add-group", "shared", "--from-json", dotenvAsJSON(t, src), "--global"); err != nil {
 		t.Fatalf("add-group: %v", err)
 	}
 	dir := projectDir(t, "entry = \"shared\"\n", "")
@@ -504,7 +506,7 @@ func TestIncludedEntriesAreMergedBeneathTheProject(t *testing.T) {
 	}
 
 	// The project's own entry wins on a variable both provide.
-	if _, err := runCmd(t, "sk-project-value", "group", "set", "warden", "OPENAI_API_KEY"); err != nil {
+	if _, err := runCmd(t, "sk-project-value", "group", "set", "-g", "warden", "OPENAI_API_KEY"); err != nil {
 		t.Fatalf("group set: %v", err)
 	}
 	out, err = runCmd(t, "", "export", "--format", "dotenv")
@@ -573,7 +575,7 @@ func TestOnlyFollowsTheGroup(t *testing.T) {
 	}
 	path := filepath.Join(dir, vault.ProjectFileName)
 
-	if _, err := runCmd(t, "sk-test-value", "group", "set", "warden", "STRIPE_KEY"); err != nil {
+	if _, err := runCmd(t, "sk-test-value", "group", "set", "-g", "warden", "STRIPE_KEY"); err != nil {
 		t.Fatalf("group set: %v", err)
 	}
 	b, _ := os.ReadFile(path)
@@ -589,7 +591,7 @@ func TestOnlyFollowsTheGroup(t *testing.T) {
 		t.Fatalf("exec after the rewrite: %v", err)
 	}
 
-	if _, err := runCmd(t, "", "group", "unset", "warden", "STRIPE_KEY"); err != nil {
+	if _, err := runCmd(t, "", "group", "unset", "-g", "warden", "STRIPE_KEY"); err != nil {
 		t.Fatalf("group unset: %v", err)
 	}
 	b, _ = os.ReadFile(path)
@@ -603,7 +605,7 @@ func TestOnlyFollowsTheGroup(t *testing.T) {
 	if _, err := runCmd(t, "", "init", "plain", "--from-dotenv", src); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if _, err := runCmd(t, "sk-test-value", "group", "set", "plain", "NEW_KEY"); err != nil {
+	if _, err := runCmd(t, "sk-test-value", "group", "set", "-g", "plain", "NEW_KEY"); err != nil {
 		t.Fatalf("group set: %v", err)
 	}
 	b, _ = os.ReadFile(filepath.Join(plain, vault.ProjectFileName))

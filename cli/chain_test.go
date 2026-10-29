@@ -53,7 +53,7 @@ func addGroup(t *testing.T, name, dotenv string) {
 	if err := writeFileString(src, dotenv); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCmd(t, "", "add-group", name, "--from-dotenv", src, "--no-project"); err != nil {
+	if _, err := runCmd(t, "", "add-group", name, "--from-json", dotenvAsJSON(t, src), "--global"); err != nil {
 		t.Fatalf("add-group %s: %v", name, err)
 	}
 }
@@ -265,7 +265,7 @@ func TestChainPicksUpADeeperLocation(t *testing.T) {
 	// add-group at a repository root records the location and writes a
 	// project file; removing the file leaves the group claimed by the
 	// directory in your own config alone, which is the case under test.
-	if _, err := runCmd(t, "", "add-group", "worker", "--from-dotenv", src); err != nil {
+	if _, err := runCmd(t, "", "add-group", "worker", "--from-json", dotenvAsJSON(t, src)); err != nil {
 		t.Fatalf("add-group: %v", err)
 	}
 	if err := os.Remove(filepath.Join(sub, vault.ProjectFileName)); err != nil {

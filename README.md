@@ -47,9 +47,9 @@ gh attestation verify sanduk_*_darwin_arm64.tar.gz --repo junaid18183/sanduk
 sanduk add openai --as OPENAI_API_KEY
 
 # a group of related fields (field names are the env var names)
-sanduk add-group warden --from-dotenv .env.warden
+sanduk import .env.warden --group warden
 
-sanduk list          # the entries in scope here; --all for every one
+sanduk list          # the entries in scope here; --scope all for every one
 ```
 
 In a repository, set it up in one step instead — including one somebody else
@@ -63,7 +63,8 @@ cd ~/work/warden && sanduk init --from-template
 > are never taken from the command line, where `ps` would show them.
 >
 > An existing entry is never replaced silently: `add-group` asks you to use
-> `group set` (to merge) or to pass `--replace` (to overwrite).
+> `group set` (to merge) or to pass `--replace` (to overwrite). `add` likewise
+> refuses an existing secret and points at `rotate`, which changes its value.
 
 > A runnable version of everything below lives in
 > [`examples/project`](examples/project):
@@ -101,11 +102,11 @@ instead of storing a second copy:
 sanduk add openai --as OPENAI_API_KEY
 
 # point a project group at it — nothing is copied
-sanduk group link warden openai
+sanduk group link -g warden openai
 # Linked OPENAI_API_KEY in group "warden" -> secret "openai"
 
 # or bind it under a different variable name in this group
-sanduk group link warden LLM_KEY=openai
+sanduk group link -g warden LLM_KEY=openai
 ```
 
 A bare secret name uses the variable that secret is already exposed as — its
@@ -128,7 +129,7 @@ cares which variables the group contributes, not where each value is kept. Pass
 `--long` to see the difference:
 
 ```sh
-sanduk group show warden --long
+sanduk group show -g warden --long
 # KEY                   SOURCE
 # OPENAI_API_KEY    -> openai
 # DB_URL         stored
@@ -144,14 +145,15 @@ sanduk exec warden -- ./server
 ```
 
 `sanduk doctor --links` finds that before a deploy does, and exits 3 if any link
-dangles. `sanduk group unlink warden OPENAI_API_KEY` drops the pointer and
+dangles. `sanduk group unlink -g warden OPENAI_API_KEY` drops the pointer and
 leaves the secret itself untouched.
 
 Two rules keep links predictable:
 
-- **A link may only point at a flat secret.** That makes a cycle impossible by
-  construction rather than by a depth limit, and keeps resolution to one extra
-  read per distinct target.
+- **A link points at a flat secret or at a stored field of another group, and
+  nothing else.** A field link may only name a value that group stores itself,
+  never one of its links, so every link is one hop from its value and a cycle is
+  impossible by construction rather than by a depth limit.
 - **A variable is either stored in the group or linked, never both.** There is no
   precedence rule to remember; `group link` refuses a name the group already
   stores, and tells you to `group unset` it first or link under another name.
@@ -167,23 +169,32 @@ sharing rather than on where it is going:
 
 | You want | Use | Notes |
 | --- | --- | --- |
-| A flat secret in several groups | `sanduk group link <group> <secret>` | Creates the group if it does not exist yet. The secret stays the single source of truth, and drops out of the top-level listing as that group's building block. |
+| A flat secret in several groups | `sanduk group link -g <group> <secret>` | Creates the group if it does not exist yet. The secret stays the single source of truth, and drops out of the top-level listing as that group's building block. |
+| One field of a group, under another group | `sanduk group link -g <group> VAR=<Group>/<FIELD>` | The field stays stored in its group, which is the single source of truth. Nothing is copied, and the variable name is required. |
 | A whole global group underneath one repository | `include = ["<entry>"]` in `.sanduk.toml` | Resolved before the project's own entry, so the project wins a variable both provide. Nothing is copied. |
 | The same thing in every repository under a directory | A `.sanduk.toml` in that directory | [Sharing down a directory tree](#sharing-down-a-directory-tree). The nearest directory wins. |
 
-A link may point at a **flat secret only**, so there is no way to take one key
-out of another group:
+A link to a whole group is still refused, because a group is an aggregate and
+not a value:
 
 ```sh
-$ sanduk group link bidops opencode
-sanduk: "opencode" is a group; a link must point at a flat secret
+$ sanduk group link -g bidops opencode
+sanduk: "opencode" is a group; a link must point at a flat secret or a Group/FIELD
 ```
 
-That is the model rather than a gap: flat secrets are the shared building
-blocks and groups are the aggregates. If one field of a group turns out to be
-wanted elsewhere, store it as a flat secret and link it from both — which also
-means a single `sanduk rotate` covers every group using it. `include` takes the
-group whole, and a project file's `only` narrows its own entry alone, so it
+To take one key out of another group, name its field. A group keeping every
+provider key in one place can then feed a project's variable directly:
+
+```sh
+$ sanduk group link -g maktub ELEVENLABS_API_KEY=ElevenLabs/elevenlabs_siddik
+```
+
+The variable name is required, since a field has no secret name to take it
+from. The key stays in `ElevenLabs`, so rotating it there changes what `maktub`
+injects. A flat secret is still the shared building block when the same value
+is wanted by several groups, because a single `sanduk rotate` covers every
+group using it. `include` takes the group whole, and a project file's `only`
+narrows its own entry alone, so it
 cannot be used to thin an include down to one key.
 
 ### Credential files
@@ -260,7 +271,7 @@ Start from the repository, before it has any secrets:
 cd ~/work/warden
 sanduk init                              # entry named after the directory
 sanduk init warden --from-dotenv .env    # or name it, and seed it now
-sanduk group set warden STRIPE_KEY       # fill it in afterwards
+sanduk group set STRIPE_KEY              # fill it in afterwards: -g defaults to warden here
 ```
 
 `sanduk init` writes `.sanduk.toml`, approves it, and records the directory
@@ -296,7 +307,7 @@ repository's group:
 
 ```sh
 cd ~/work/warden
-sanduk add-group warden --from-dotenv .env
+sanduk init warden --from-dotenv .env
 # Added group "warden" with 4 field(s)
 # Recorded "warden" as the group for /Users/you/work/warden
 # Wrote and approved .sanduk.toml — commit it: it names the entry, never a value
@@ -324,8 +335,9 @@ Two things were recorded, and they are different statements:
     location    = "/Users/you/work/warden"
   ```
 
-`sanduk add-group` only does this at a repository root, and never overwrites an
-existing `.sanduk.toml`. `--no-project` creates a plain global group instead.
+`sanduk init` does this, and never overwrites an existing `.sanduk.toml`.
+`add-group` does the same at a repository root or in a folder with no `.git`;
+its `--global` flag creates a plain global group instead.
 
 #### Layering a global entry underneath
 
@@ -487,7 +499,7 @@ OPENAI_API_KEY  -> openai
 NAME        TYPE    ENV / INFO
 elevenlabs  secret  ELEVENLABS_API_KEY
 groq        secret  GROQ_API_KEY
-sanduk: 14 entry/entries hidden (9 member, 5 project) — see "sanduk list --all"
+sanduk: 14 entry/entries hidden (9 member, 5 project) — see "sanduk list --scope all"
 ```
 
 Inside a project that is the whole answer: the chain is shown, and the table
@@ -509,7 +521,7 @@ DATABASE_URL       bidops  stored
 GITHUB_TOKEN       acme    stored  (shadows code)
 KUBECONFIG         bidops  stored
 OPENAI_API_KEY     code    stored
-sanduk: 6 entry/entries hidden (4 member, 2 global) — see "sanduk list --all"
+sanduk: 6 entry/entries hidden (4 member, 2 global) — see "sanduk list --scope all"
 ```
 
 Outside any project there is no chain to show, so the global entries are the
@@ -526,7 +538,7 @@ entry at most once, so a presence-gated backend prompts once per entry;
 nothing: the listing says so and shows the vault as if the file were not
 there.
 
-`--all` shows everything with a `SCOPE` column, and `--scope project|member|global`
+`--scope all` shows everything with a `SCOPE` column, and `--scope project|member|global`
 shows one kind. The hidden count always goes to stderr, so a shorter list never
 reads as a missing entry. Membership is tracked in `config.toml` as a
 `linked_by` hint, kept current by `group link`/`unlink` and rebuilt from the
@@ -690,26 +702,25 @@ you want described with `--backend`/`--config` or the `SANDUK_*` variables.
 | Command | Description |
 | --- | --- |
 | `sanduk init [entry]` | Write and approve this repository's `.sanduk.toml` (`--from-template` prompts for the keys a committed `.env.example`/`.env.template` lists, `--from-dotenv`, `--include`, `--only`, `--envrc`, `--force`). |
-| `sanduk add <name>` | Add/update a flat secret (`--as VAR`, `--from-env VAR`, `--from-file F`, `--description`, `--expires`, `--replace`). |
-| `sanduk add-group <name>` | Create a group (`--from-dotenv F`, `--from-json F\|-`, `--field KEY` prompts, `--description`, `--expires`, `--replace`). At a repository root it also records the location and writes `.sanduk.toml`; `--no-project` opts out. |
+| `sanduk add <name>` | Add a new flat secret (`--as VAR`, `--from-env VAR`, stdin, `--description`, `--expires`, `--replace` to overwrite any entry). Refuses an existing secret; use `rotate`. |
+| `sanduk add-group <name>` | Create a group (`--from-json F\|-`, `--field KEY` prompts, `--description`, `--expires`, `--replace`, `--global`). With no fields it creates an empty group. Only this command creates a group. At a repository root, or in a folder with no `.git`, it also records the directory and writes `.sanduk.toml`. |
 | `sanduk add-file <name>` | Store a credential file, injected as a path (`--from-file F\|-`, `--as VAR`, `--filename`, `--description`, `--expires`, `--replace`). |
-| `sanduk group set <name> [KEY…]` | Merge fields into a group (prompt, stdin, `--from-env` reads each KEY from `$KEY`, `--from-dotenv F`, `--description`, `--expires`). |
-| `sanduk group unset <name> KEY…` | Remove fields from a group. |
-| `sanduk group link <name> [VAR=]<secret>` | Point a group field at a flat secret instead of copying its value. |
-| `sanduk group unlink <name> KEY…` | Remove a link; the secret it pointed at is untouched. |
+| `sanduk group set [-g G] [KEY…]` | Merge fields into an existing group (prompt, stdin, `--from-env VAR` for the one KEY, `--from-dotenv F`, `--description`, `--expires`). |
+| `sanduk group unset [-g G] KEY…` | Remove fields from a group. |
+| `sanduk group link [-g G] [VAR=]<target>` | Point a group field at a flat secret, or at `Group/FIELD` (the `VAR=` form is required for that). |
+| `sanduk group unlink [-g G] KEY…` | Remove a link; the target it pointed at is untouched. |
 | `sanduk group list` | List every group and the directory it belongs to (`--here`, `--keys`, `--json`, `--names`). |
-| `sanduk group show <name>` | List a group's field names (never values; `--long` shows which are links). |
-| `sanduk group get <name> KEY` | Inspect one field (redacted unless `--reveal`; terminal-gated, `--force`). |
-| `sanduk get <name>` | Inspect a value, redacted unless `--reveal` (terminal-gated, `--force`; `--field`/`--all` for groups). |
+| `sanduk group show [-g G]` | List a group's field names (never values; `--long` shows which are links). |
+| `sanduk get <name>` | Inspect a value, redacted unless `--reveal` (terminal-gated, `--force`; `--field KEY` for one field of a group). |
 | `sanduk exec [selector…] -- <cmd>` | Run a command with secrets injected (`--only`, `--except`, `--list`, `--materialize DIR`). |
-| `sanduk export [selector…]` | Emit secrets for scripts (`-f shell\|dotenv\|json`, `--only`, `--except`, `-o FILE`, `--force`, `--materialize DIR`). |
-| `sanduk list` | List the entries in scope: this repository's, plus the global ones (never values; `--all`, `--scope`, `--no-keys`, `--json`, `--names`). An entry with no metadata shows as `unknown`. |
+| `sanduk export [selector…]` | Emit secrets for scripts (`-f shell\|dotenv\|json`, `--only`, `--except`, `-o FILE`, `--replace`, `--materialize DIR`). |
+| `sanduk list` | List the entries in scope: this repository's, plus the global ones (never values; `--scope`, `--no-keys`, `--json`, `--names`). An entry with no metadata shows as `unknown`. |
 | `sanduk doctor [entry]` | Check a group against `.env.example` (`--template F`); exits 3 on missing keys. `--metadata [--fix]` checks config.toml against the vault; `--links` checks every group link resolves (`--fix` rebuilds the `linked_by` hints); `--expiry [--within N]` reports rotation deadlines; `--chain` reports the `.sanduk.toml` files that apply here and which variables come from outside this directory. |
 | `sanduk scan [path…]` | Search the tree (`--git`, `--shell`) for stored values that escaped the vault; exits 3 on a find. Reads every value, so it needs `--yes` without a terminal. |
 | `sanduk mcp` | Serve entry metadata to an AI agent over MCP — names only, never values, no execution. |
 | `sanduk allow [dir]` | Approve a repository's `.sanduk.toml` for `exec`/`export`/`doctor`, and record the group's location. Names the files above it that still need approving. |
 | `sanduk remove <name>` | Delete an entry and its metadata (prompts; `--yes` when non-interactive). |
-| `sanduk rotate <name>` | Replace a flat secret's value (`--from-env VAR`, `--from-file F`, or prompt/stdin; `--expires` to move the deadline). |
+| `sanduk rotate <name>` | Replace a flat secret's value (`--from-env VAR`, or prompt/stdin; `--expires` to move the deadline). |
 | `sanduk import <file>` | Bulk-import a `.env`, CSV export or `.1pux` archive (`--format`, `--group NAME`, `--replace`, `--delete`, `--dry-run`). |
 | `sanduk config` | Show the config file and the settings sanduk resolved (`--path`, `--edit` opens `$EDITOR`). |
 | `sanduk completion <shell>` | Print a completion script for bash, zsh, fish or powershell. |
@@ -915,7 +926,8 @@ there; `exec` does not. Plaintext reaches disk only where you ask for it:
 - Values are never accepted as command-line arguments, so they cannot leak via
   process listings (`ps`). Input comes from an echo-disabled prompt, an env var,
   a file, or stdin — including for `add-group`, whose `--field KEY` prompts and
-  whose `--from-json` reads a file or stdin.
+  whose `--from-json` reads a file or stdin, and for `add`, which reads stdin
+  (`sanduk add NAME < key.txt`) rather than taking a file flag.
 - `exec` strips every `SANDUK_*` variable (in any letter case) from the child
   environment, so a child cannot read `SANDUK_FILE_PASSPHRASE` (or any other
   sanduk setting) out of its own environment and unlock the whole vault. This
