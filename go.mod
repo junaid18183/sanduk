@@ -7,7 +7,7 @@ require (
 	github.com/99designs/keyring v1.2.2
 	github.com/BurntSushi/toml v1.6.0
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.47.0
 )
 
